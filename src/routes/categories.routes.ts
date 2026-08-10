@@ -4,6 +4,7 @@ import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
 import { requireAdmin, requireAuth } from "../middleware/auth";
+import { uploadCategoryImage } from "./uploads.routes";
 
 export const categoriesRouter = Router();
 const boolean = z.preprocess(value => value === "true" ? true : value === "false" ? false : value, z.boolean());
@@ -19,8 +20,10 @@ categoriesRouter.get("/:id", asyncHandler(async (req, res) => {
   if (!rows[0]) throw new HttpError(404, "Category not found");
   res.json({ success: true, data: rows[0] });
 }));
-categoriesRouter.post("/", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
-  const input = categoryInput.parse(req.body);
+categoriesRouter.post("/", requireAuth, requireAdmin, uploadCategoryImage.single("image"), asyncHandler(async (req, res) => {
+  // With multipart/form-data, Multer puts text fields in req.body and the file in req.file.
+  // With JSON, clients may still send a previously uploaded image filename in req.body.image.
+  const input = categoryInput.parse({ ...req.body, image: req.file?.filename ?? req.body?.image });
   const [result] = await db.execute<any>("INSERT INTO categories (name, slug, image_url, is_active) VALUES (?, ?, ?, ?)", [input.name, input.slug, input.image ?? null, input.isActive ?? true]);
   const [rows] = await db.execute<any[]>("SELECT id, name, slug, image_url AS image, is_active AS isActive FROM categories WHERE id = ?", [result.insertId]);
   res.status(201).json({ success: true, data: rows[0] });

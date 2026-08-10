@@ -22,7 +22,7 @@ const storage = multer.diskStorage({
   },
 });
 
-const uploadCategoryImage = multer({
+export const uploadCategoryImage = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
   fileFilter: (_req, file, callback) => {
