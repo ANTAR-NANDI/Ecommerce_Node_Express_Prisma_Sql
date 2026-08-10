@@ -9,6 +9,7 @@ import { requireAdmin, requireAuth } from "../middleware/auth";
 export const uploadsRouter = Router();
 const categoriesDirectory = path.resolve("uploads", "categories");
 const subcategoriesDirectory = path.resolve("uploads", "subcategories");
+const brandsDirectory = path.resolve("uploads", "brands");
 const allowedMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
 const storage = multer.diskStorage({
@@ -47,6 +48,21 @@ export const uploadSubcategoryImage = multer({
   },
 });
 
+export const uploadBrandImage = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => {
+      fs.mkdirSync(brandsDirectory, { recursive: true });
+      callback(null, brandsDirectory);
+    },
+    filename: (_req, file, callback) => callback(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    if (!allowedMimeTypes.has(file.mimetype)) return callback(new HttpError(400, "Only JPEG, PNG, WebP, and GIF images are allowed"));
+    callback(null, true);
+  },
+});
+
 // Upload first, then send the returned filename as "image" when creating a category.
 uploadsRouter.post("/categories", requireAuth, requireAdmin, uploadCategoryImage.single("image"), (req, res, next) => {
   if (!req.file) return next(new HttpError(400, "Send an image file in the 'image' field"));
@@ -62,4 +78,9 @@ uploadsRouter.post("/categories", requireAuth, requireAdmin, uploadCategoryImage
 uploadsRouter.post("/subcategories", requireAuth, requireAdmin, uploadSubcategoryImage.single("image"), (req, res, next) => {
   if (!req.file) return next(new HttpError(400, "Send an image file in the 'image' field"));
   res.status(201).json({ success: true, data: { filename: req.file.filename, url: `/uploads/subcategories/${req.file.filename}` } });
+});
+
+uploadsRouter.post("/brands", requireAuth, requireAdmin, uploadBrandImage.single("image"), (req, res, next) => {
+  if (!req.file) return next(new HttpError(400, "Send an image file in the 'image' field"));
+  res.status(201).json({ success: true, data: { filename: req.file.filename, url: `/uploads/brands/${req.file.filename}` } });
 });
