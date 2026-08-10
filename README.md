@@ -7,7 +7,7 @@ This is a TypeScript + Express + MySQL API. TypeScript adds type checks to JavaS
 1. Copy `.env.example` to `.env`, then set your MySQL credentials and two long, different JWT secrets. Keep `.env` private.
 2. Run `npm run migrate`. A **migration** is a versioned SQL file: it creates the tables once and records its filename in the `migrations` table.
 3. Set the `ADMIN_*` values in `.env`, then run `npm run create:admin`.
-4. Start the development server with `npm run dev`. Test `GET http://localhost:5000/health`.
+4. Start the server with `npm run dev`. Test `GET http://localhost:5000/health`. This command compiles TypeScript into `dist/` and then runs it.
 
 ## Project map
 
