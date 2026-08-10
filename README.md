@@ -17,6 +17,10 @@ This is a TypeScript + Express + MySQL API. TypeScript adds type checks to JavaS
 - `src/middleware/auth.ts` reads `Authorization: Bearer <accessToken>` and protects admin write operations.
 - `migrations/001_initial_schema.sql` defines the database tables.
 
+## Frontend CORS
+
+Browsers can call the API only from origins in `CORS_ORIGIN`. Locally, it defaults to `http://localhost:5173` (Vite's usual development URL). In Railway, set `CORS_ORIGIN` to your deployed frontend URL. For more than one frontend, separate URLs with commas, for example `https://shop.example.com,https://admin.example.com`.
+
 ## Authentication flow
 
 `POST /auth/admin/login` with `{ "email", "password" }` returns an access token (15 minutes) and refresh token (7 days). Send the access token in `Authorization: Bearer ...` for `/auth/me` and all category/subcategory writes. When the access token expires, send the refresh token to `/auth/refresh`; it returns a new pair and invalidates the old refresh token. `/auth/logout` revokes the submitted refresh token.
@@ -36,3 +40,7 @@ Content-Type: application/json
 ```
 
 Subcategories use the same fields plus `categoryId`. `GET /subcategories?categoryId=1` filters by category. Read endpoints are public; create, update, and delete endpoints require an admin token.
+
+## Brand requests
+
+`GET /brands` and `GET /brands/:id` are public. Admin-only CRUD uses `POST`, `PATCH`, and `DELETE` on `/brands`. A brand accepts `name`, a lowercase `slug`, optional `logoUrl`, optional `description`, and optional `isActive`.

@@ -1,12 +1,21 @@
 import "dotenv/config";
+import cors from "cors";
 import express from "express";
 import { env } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { authRouter } from "./routes/auth.routes";
+import { brandsRouter } from "./routes/brands.routes";
 import { categoriesRouter } from "./routes/categories.routes";
 import { subcategoriesRouter } from "./routes/subcategories.routes";
 
 const app = express();
+const allowedOrigins = env.CORS_ORIGIN.split(",").map(origin => origin.trim()).filter(Boolean);
+
+// Allows the frontend browser to call this API from the approved origin(s).
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+}));
 
 // Parses JSON request bodies, e.g. { "email": "admin@example.com" }.
 app.use(express.json());
@@ -16,6 +25,7 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/auth", authRouter);
+app.use("/brands", brandsRouter);
 app.use("/categories", categoriesRouter);
 app.use("/subcategories", subcategoriesRouter);
 

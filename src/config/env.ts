@@ -10,6 +10,8 @@ const schema = z.object({
   DB_PASSWORD: z.string().default(""),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
+  // Comma-separated frontend URLs allowed to call this API from a browser.
+  CORS_ORIGIN: z.string().default("http://localhost:5173"),
 });
 
 export const env = schema.parse(process.env);
