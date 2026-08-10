@@ -41,6 +41,12 @@ Content-Type: application/json
 
 Subcategories use the same fields plus `categoryId`. `GET /subcategories?categoryId=1` filters by category. Read endpoints are public; create, update, and delete endpoints require an admin token.
 
+## Category image upload
+
+Upload an image before creating the category. Send a `multipart/form-data` request to `POST /uploads/categories` with an `image` file field and an admin access token. The response has a generated `filename`; send that filename in the category JSON as `image`, for example `{ "name": "Electronics", "slug": "electronics", "image": "generated-file-name.jpg", "isActive": true }`. Uploaded images are served at `/uploads/categories/<filename>`.
+
+Local files are stored in `uploads/categories`. On Railway, attach a persistent Volume at `/app/uploads`, otherwise uploads are removed on the next deployment.
+
 ## Brand requests
 
 `GET /brands` and `GET /brands/:id` are public. Admin-only CRUD uses `POST`, `PATCH`, and `DELETE` on `/brands`. A brand accepts `name`, a lowercase `slug`, optional `logoUrl`, optional `description`, and optional `isActive`.
