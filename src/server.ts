@@ -22,6 +22,7 @@ app.use("/subcategories", subcategoriesRouter);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-app.listen(env.PORT, () => {
-  console.log(`ReadyEcommerce API listening at http://localhost:${env.PORT}`);
+// Railway assigns PORT. 0.0.0.0 accepts traffic from Railway's public proxy.
+app.listen(env.PORT, "0.0.0.0", () => {
+  console.log(`ReadyEcommerce API listening on port ${env.PORT}`);
 });
