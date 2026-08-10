@@ -47,6 +47,8 @@ Create a category with one `multipart/form-data` request: send `POST /categories
 
 Local files are stored in `uploads/categories`. On Railway, attach a persistent Volume at `/app/uploads`, otherwise uploads are removed on the next deployment.
 
+Subcategories work the same way: submit `POST /subcategories` as `multipart/form-data` with `categoryId`, `name`, `slug`, optional `isActive`, and an `image` File. Files are saved in `uploads/subcategories`.
+
 ## Brand requests
 
 `GET /brands` and `GET /brands/:id` are public. Admin-only CRUD uses `POST`, `PATCH`, and `DELETE` on `/brands`. A brand accepts `name`, a lowercase `slug`, optional `logoUrl`, optional `description`, and optional `isActive`.
