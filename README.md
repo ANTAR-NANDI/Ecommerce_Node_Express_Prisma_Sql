@@ -86,3 +86,7 @@ Create an audited stock correction with `POST /stock-adjustments`; each item has
 ## POS sales and sales history
 
 All `/pos-sales` endpoints require an admin access token. Create a completed counter sale with `POST /pos-sales`. It reduces the selected warehouse's stock and the product's total stock in one database transaction. `customerId` is optional; send `null` for a walk-in customer. Read sales history with `GET /pos-sales`, optionally filtering by `warehouseId`, `customerId`, `status`, `dateFrom`, and `dateTo`. Use `PATCH /pos-sales/:id/cancel` only to void the complete sale; it restores all of the sale's stock. A partial customer return will be handled separately as a sales-return module.
+
+## E-commerce orders
+
+`POST /ecommerce-orders` is public and intended for the shop frontend checkout. It accepts the customer's contact and shipping details, creates or updates the customer by phone number, and creates a `pending` order. The request sends only product IDs and quantities: the server reads selling prices from the database, which prevents browser price tampering. It reserves stock immediately from the selected `warehouseId`, so the same stock cannot also be sold through POS. The admin order list is `GET /ecommerce-orders`; filter with `warehouseId`, `customerId`, `status`, `paymentStatus`, `dateFrom`, or `dateTo`. Admins can see one order at `GET /ecommerce-orders/:id` and update operational/payment state at `PATCH /ecommerce-orders/:id/status`. Changing an order to `cancelled` returns its reserved stock.
