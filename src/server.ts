@@ -13,6 +13,9 @@ import { uploadsRouter } from "./routes/uploads.routes";
 const app = express();
 const allowedOrigins = env.CORS_ORIGIN.split(",").map(origin => origin.trim()).filter(Boolean);
 
+// Railway forwards HTTPS requests through a proxy; this preserves https in generated URLs.
+app.set("trust proxy", 1);
+
 // Allows the frontend browser to call this API from the approved origin(s).
 app.use(cors({
   origin: allowedOrigins,
@@ -21,6 +24,10 @@ app.use(cors({
 
 // Parses JSON request bodies, e.g. { "email": "admin@example.com" }.
 app.use(express.json());
+// Singular public aliases match the API response format while retaining existing upload folders.
+app.use("/uploads/category", express.static(path.resolve("uploads", "categories")));
+app.use("/uploads/subcategory", express.static(path.resolve("uploads", "subcategories")));
+app.use("/uploads/brand", express.static(path.resolve("uploads", "brands")));
 app.use("/uploads", express.static(path.resolve("uploads")));
 
 app.get("/health", (_req, res) => {

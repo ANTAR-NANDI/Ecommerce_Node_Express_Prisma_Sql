@@ -3,10 +3,12 @@ import { z } from "zod";
 import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
+import { publicImageUrl } from "../lib/public-image-url";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 import { uploadSubcategoryImage } from "./uploads.routes";
 
 export const subcategoriesRouter = Router();
+const withImageUrl = (req: Parameters<typeof publicImageUrl>[0], row: any) => ({ ...row, image: publicImageUrl(req, "subcategory", row.image) });
 const boolean = z.preprocess(value => value === "true" ? true : value === "false" ? false : value, z.boolean());
 const imageFilename = z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.(jpg|jpeg|png|webp|gif)$/i, "Image must be an uploaded image filename");
 const inputSchema = z.object({ categoryId: z.coerce.number().int().positive(), name: z.string().trim().min(2).max(100), slug: z.string().trim().min(2).max(120).regex(/^[a-z0-9-]+$/), image: imageFilename.nullable().optional(), isActive: boolean.optional() });
@@ -15,11 +17,11 @@ const select = "SELECT s.id, s.category_id AS categoryId, s.name, s.slug, s.imag
 subcategoriesRouter.get("/", asyncHandler(async (req, res) => {
   const categoryId = req.query.categoryId ? z.coerce.number().int().positive().parse(req.query.categoryId) : undefined;
   const [rows] = categoryId ? await db.execute(`${select} WHERE s.category_id = ? ORDER BY s.name`, [categoryId]) : await db.query(`${select} ORDER BY s.name`);
-  res.json({ success: true, data: rows });
+  res.json({ success: true, data: (rows as any[]).map(row => withImageUrl(req, row)) });
 }));
 subcategoriesRouter.get("/:id", asyncHandler(async (req, res) => {
   const [rows] = await db.execute<any[]>(`${select} WHERE s.id = ?`, [Number(req.params.id)]);
-  if (!rows[0]) throw new HttpError(404, "Subcategory not found"); res.json({ success: true, data: rows[0] });
+  if (!rows[0]) throw new HttpError(404, "Subcategory not found"); res.json({ success: true, data: withImageUrl(req, rows[0]) });
 }));
 subcategoriesRouter.post("/", requireAuth, requireAdmin, uploadSubcategoryImage.single("image"), asyncHandler(async (req, res) => {
   const input = inputSchema.parse({ ...req.body, image: req.file?.filename ?? req.body?.image });

@@ -3,10 +3,12 @@ import { z } from "zod";
 import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
+import { publicImageUrl } from "../lib/public-image-url";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 import { uploadBrandImage } from "./uploads.routes";
 
 export const brandsRouter = Router();
+const withImageUrl = (req: Parameters<typeof publicImageUrl>[0], row: any) => ({ ...row, image: publicImageUrl(req, "brand", row.image) });
 
 const boolean = z.preprocess(value => value === "true" ? true : value === "false" ? false : value, z.boolean());
 const brandInput = z.object({
@@ -21,13 +23,13 @@ const select = "SELECT id, name, slug, logo_url AS image, description, is_active
 
 brandsRouter.get("/", asyncHandler(async (_req, res) => {
   const [rows] = await db.query(`${select} ORDER BY name`);
-  res.json({ success: true, data: rows });
+  res.json({ success: true, data: (rows as any[]).map(row => withImageUrl(_req, row)) });
 }));
 
 brandsRouter.get("/:id", asyncHandler(async (req, res) => {
   const [rows] = await db.execute<any[]>(`${select} WHERE id = ?`, [Number(req.params.id)]);
   if (!rows[0]) throw new HttpError(404, "Brand not found");
-  res.json({ success: true, data: rows[0] });
+  res.json({ success: true, data: withImageUrl(req, rows[0]) });
 }));
 
 brandsRouter.post("/", requireAuth, requireAdmin, uploadBrandImage.single("image"), asyncHandler(async (req, res) => {
@@ -37,7 +39,7 @@ brandsRouter.post("/", requireAuth, requireAdmin, uploadBrandImage.single("image
     [input.name, input.slug, input.image ?? null, input.description ?? null, input.isActive ?? true],
   );
   const [rows] = await db.execute<any[]>(`${select} WHERE id = ?`, [result.insertId]);
-  res.status(201).json({ success: true, data: rows[0] });
+  res.status(201).json({ success: true, data: withImageUrl(req, rows[0]) });
 }));
 
 brandsRouter.patch("/:id", requireAuth, requireAdmin, asyncHandler(async (req, res) => {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { Router } from "express";
 import multer from "multer";
 import { HttpError } from "../lib/http-error";
+import { publicImageUrl } from "../lib/public-image-url";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 
 export const uploadsRouter = Router();
@@ -70,17 +71,17 @@ uploadsRouter.post("/categories", requireAuth, requireAdmin, uploadCategoryImage
     success: true,
     data: {
       filename: req.file.filename,
-      url: `/uploads/categories/${req.file.filename}`,
+      url: publicImageUrl(req, "category", req.file.filename),
     },
   });
 });
 
 uploadsRouter.post("/subcategories", requireAuth, requireAdmin, uploadSubcategoryImage.single("image"), (req, res, next) => {
   if (!req.file) return next(new HttpError(400, "Send an image file in the 'image' field"));
-  res.status(201).json({ success: true, data: { filename: req.file.filename, url: `/uploads/subcategories/${req.file.filename}` } });
+  res.status(201).json({ success: true, data: { filename: req.file.filename, url: publicImageUrl(req, "subcategory", req.file.filename) } });
 });
 
 uploadsRouter.post("/brands", requireAuth, requireAdmin, uploadBrandImage.single("image"), (req, res, next) => {
   if (!req.file) return next(new HttpError(400, "Send an image file in the 'image' field"));
-  res.status(201).json({ success: true, data: { filename: req.file.filename, url: `/uploads/brands/${req.file.filename}` } });
+  res.status(201).json({ success: true, data: { filename: req.file.filename, url: publicImageUrl(req, "brand", req.file.filename) } });
 });
