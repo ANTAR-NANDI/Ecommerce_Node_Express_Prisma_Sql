@@ -90,3 +90,7 @@ All `/pos-sales` endpoints require an admin access token. Create a completed cou
 ## E-commerce orders
 
 `POST /ecommerce-orders` is public and intended for the shop frontend checkout. It accepts the customer's contact and shipping details, creates or updates the customer by phone number, and creates a `pending` order. The request sends only product IDs and quantities: the server reads selling prices from the database, which prevents browser price tampering. It reserves stock immediately from the selected `warehouseId`, so the same stock cannot also be sold through POS. The admin order list is `GET /ecommerce-orders`; filter with `warehouseId`, `customerId`, `status`, `paymentStatus`, `dateFrom`, or `dateTo`. Admins can see one order at `GET /ecommerce-orders/:id` and update operational/payment state at `PATCH /ecommerce-orders/:id/status`. Changing an order to `cancelled` returns its reserved stock.
+
+## Sales returns
+
+Sales returns use `/sales-returns` and require an admin access token. `POST /sales-returns` accepts either a completed `pos_sale` or delivered `ecommerce_order`, then restores the returned products to the original warehouse. It prevents returning more than the original sold quantity across all prior completed returns. Use `GET /sales-returns` for history and `PATCH /sales-returns/:id/cancel` to reverse an accidental return only when the returned stock remains available.
