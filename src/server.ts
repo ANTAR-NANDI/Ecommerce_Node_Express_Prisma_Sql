@@ -8,10 +8,13 @@ import { authRouter } from "./routes/auth.routes";
 import { brandsRouter } from "./routes/brands.routes";
 import { colorsRouter } from "./routes/colors.routes";
 import { productsRouter } from "./routes/products.routes";
+import { purchasesRouter } from "./routes/purchases.routes";
 import { categoriesRouter } from "./routes/categories.routes";
 import { subcategoriesRouter } from "./routes/subcategories.routes";
+import { suppliersRouter } from "./routes/suppliers.routes";
 import { sizesRouter } from "./routes/sizes.routes";
 import { unitsRouter } from "./routes/units.routes";
+import { warehousesRouter } from "./routes/warehouses.routes";
 import { uploadsRouter } from "./routes/uploads.routes";
 
 const app = express();
@@ -43,10 +46,13 @@ app.use("/auth", authRouter);
 app.use("/brands", brandsRouter);
 app.use("/colors", colorsRouter);
 app.use("/products", productsRouter);
+app.use("/purchases", purchasesRouter);
 app.use("/categories", categoriesRouter);
 app.use("/subcategories", subcategoriesRouter);
 app.use("/sizes", sizesRouter);
 app.use("/units", unitsRouter);
+app.use("/suppliers", suppliersRouter);
+app.use("/warehouses", warehousesRouter);
 app.use("/uploads", uploadsRouter);
 
 app.use(notFoundHandler);
