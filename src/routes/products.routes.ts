@@ -124,6 +124,25 @@ productsRouter.get("/:id", asyncHandler(async (req, res) => {
   res.json({ success: true, data: product });
 }));
 
+// Public shop action. customerId comes from the signed-in customer session in a future customer-auth module.
+productsRouter.post("/:id/favorites", asyncHandler(async (req, res) => {
+  const productId = id.parse(req.params.id);
+  const customerId = z.object({ customerId: id }).parse(req.body).customerId;
+  const [product] = await db.execute<any[]>("SELECT id FROM products WHERE id = ? AND is_active = TRUE", [productId]);
+  if (!product[0]) throw new HttpError(404, "Active product not found");
+  const [customer] = await db.execute<any[]>("SELECT id FROM customers WHERE id = ? AND is_active = TRUE", [customerId]);
+  if (!customer[0]) throw new HttpError(404, "Active customer not found");
+  await db.execute("INSERT INTO product_favorites (customer_id, product_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE product_id = VALUES(product_id)", [customerId, productId]);
+  res.status(201).json({ success: true, message: "Product added to favorites" });
+}));
+
+productsRouter.delete("/:id/favorites", asyncHandler(async (req, res) => {
+  const productId = id.parse(req.params.id);
+  const customerId = z.object({ customerId: id }).parse(req.query).customerId;
+  await db.execute("DELETE FROM product_favorites WHERE customer_id = ? AND product_id = ?", [customerId, productId]);
+  res.status(204).send();
+}));
+
 productsRouter.post("/", requireAuth, requireAdmin, uploadProductImages.fields([{ name: "thumbnailImages", maxCount: 5 }, { name: "additionalImages", maxCount: 5 }]), asyncHandler(async (req, res) => {
   const input = createInput.parse(requestInput(req)); const connection = await db.getConnection();
   try {

@@ -9,7 +9,9 @@ import { requireAdmin, requireAuth } from "../middleware/auth";
 export const ecommerceOrdersRouter = Router();
 const id = z.coerce.number().int().positive();
 const money = z.coerce.number().min(0);
-const orderStatuses = ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"] as const;
+const orderStatuses = ["pending", "confirmed", "processing", "pickup", "on_the_way", "delivered", "cancelled"] as const;
+// "confirm" is accepted from an admin UI, while MySQL stores the clearer value "confirmed".
+const orderStatusInput = z.enum(["pending", "confirm", "confirmed", "processing", "pickup", "on_the_way", "delivered", "cancelled"]).transform(value => value === "confirm" ? "confirmed" : value);
 const customerInput = z.object({
   name: z.string().trim().min(2).max(150),
   phone: z.string().trim().min(6).max(30),
@@ -91,7 +93,7 @@ ecommerceOrdersRouter.post("/", asyncHandler(async (req, res) => {
 
 // Admin order list and details.
 ecommerceOrdersRouter.get("/", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
-  const query = z.object({ warehouseId: id.optional(), customerId: id.optional(), status: z.enum(orderStatuses).optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).optional(), dateFrom: z.string().date().optional(), dateTo: z.string().date().optional() }).parse(req.query);
+  const query = z.object({ warehouseId: id.optional(), customerId: id.optional(), status: orderStatusInput.optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).optional(), dateFrom: z.string().date().optional(), dateTo: z.string().date().optional() }).parse(req.query);
   const filters: string[] = []; const values: Array<string | number> = [];
   if (query.warehouseId) { filters.push("eo.warehouse_id = ?"); values.push(query.warehouseId); }
   if (query.customerId) { filters.push("eo.customer_id = ?"); values.push(query.customerId); }
@@ -110,7 +112,7 @@ ecommerceOrdersRouter.get("/:id", requireAuth, requireAdmin, asyncHandler(async 
 // Update the operational or payment status. Setting status to cancelled restores the reserved stock.
 ecommerceOrdersRouter.patch("/:id/status", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   const orderId = id.parse(req.params.id);
-  const input = z.object({ status: z.enum(orderStatuses).optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).optional() }).refine(value => value.status || value.paymentStatus, "Provide status or paymentStatus").parse(req.body);
+  const input = z.object({ status: orderStatusInput.optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).optional() }).refine(value => value.status || value.paymentStatus, "Provide status or paymentStatus").parse(req.body);
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction(); const order = await orderDetails(orderId, connection);

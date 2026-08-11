@@ -98,3 +98,7 @@ Sales returns use `/sales-returns` and require an admin access token. `POST /sal
 ## Employee requests
 
 Employee management uses admin-only CRUD at `/employees`. Creating or updating an employee accepts JSON or `multipart/form-data`; when uploading a photo, use an `image` File field. An employee has `firstName`, optional `lastName`, `phone`, optional `gender`, `email`, `role` (job designation such as `Cashier` or `Manager`), `password`, and optional `isActive`. Passwords are bcrypt-hashed and never returned by any API. `DELETE /employees/:id` is a safe deactivation, not a database delete. Employees log in with `POST /auth/employee/login`; their system access role is `employee`, so they cannot use admin-only APIs without a future permission module.
+
+## Dashboard and favorites
+
+`GET /dashboard` is admin-only and returns total active employees, products, warehouses, e-commerce orders, customers, all order-status counters, top-selling products, and most-favorited products. Optional dashboard date filtering uses `?dateFrom=YYYY-MM-DD&dateTo=YYYY-MM-DD`. The order workflow supports `pending`, `confirm` (stored as `confirmed`), `processing`, `pickup`, `on_the_way`, `delivered`, and `cancelled`. The public shop can add/remove favorites with `POST /products/:id/favorites` body `{ "customerId": 1 }` and `DELETE /products/:id/favorites?customerId=1`; this feeds the dashboard favorite ranking.
