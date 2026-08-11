@@ -78,3 +78,7 @@ Customer data is private, so every `/customers` endpoint requires an admin acces
 ## Warehouse requisition and transfer requests
 
 Create a stock request at `/warehouse-requisitions`, then approve it and create a linked draft `/warehouse-transfers` record using its `requisitionId`. Ship a transfer to remove stock from the source warehouse; receive it to add stock to the destination warehouse. Total product stock does not change during a transfer because the stock only moves between warehouses.
+
+## Stock adjustment and report requests
+
+Create an audited stock correction with `POST /stock-adjustments`; each item has a positive `quantityChange` for found/extra stock or a negative quantity for damaged/lost stock. `GET /stock-reports?warehouseId=1&productId=1&dateFrom=2026-08-01&dateTo=2026-08-31` returns current stock balances and all matching stock movements.
