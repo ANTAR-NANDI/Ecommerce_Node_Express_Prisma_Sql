@@ -26,6 +26,20 @@ authRouter.post("/admin/login", asyncHandler(async (req, res) => {
   res.json({ success: true, data: { user: { id: user.id, name: user.name, email: user.email, role: user.role }, accessToken, refreshToken } });
 }));
 
+// Employees have their own login because they cannot use admin-only APIs.
+authRouter.post("/employee/login", asyncHandler(async (req, res) => {
+  const { email, password } = credentials.parse(req.body);
+  const [rows] = await db.execute<any[]>(`SELECT u.id, u.name, u.email, u.password_hash, u.role, e.id AS employeeId, e.employee_role AS employeeRole
+    FROM users u JOIN employees e ON e.user_id = u.id
+    WHERE u.email = ? AND u.role = 'employee' AND e.is_active = 1`, [email]);
+  const user = rows[0];
+  if (!user || !(await bcrypt.compare(password, user.password_hash))) throw new HttpError(401, "Invalid email or password");
+  const payload: JwtPayload = { userId: user.id, email: user.email, role: "employee" };
+  const accessToken = makeAccessToken(payload); const refreshToken = makeRefreshToken(payload);
+  await saveRefreshToken(user.id, refreshToken);
+  res.json({ success: true, data: { user: { id: user.id, employeeId: user.employeeId, name: user.name, email: user.email, role: user.role, employeeRole: user.employeeRole }, accessToken, refreshToken } });
+}));
+
 authRouter.get("/me", requireAuth, asyncHandler(async (req, res) => {
   const [rows] = await db.execute<any[]>("SELECT id, name, email, role, created_at FROM users WHERE id = ?", [req.user!.userId]);
   if (!rows[0]) throw new HttpError(404, "User not found");

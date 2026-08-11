@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env";
 
-export type JwtPayload = { userId: number; email: string; role: "admin" | "customer" };
+export type JwtPayload = { userId: number; email: string; role: "admin" | "employee" | "customer" };
 
 export const makeAccessToken = (payload: JwtPayload) =>
   jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: "7d" });

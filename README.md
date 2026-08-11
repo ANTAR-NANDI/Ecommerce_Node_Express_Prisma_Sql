@@ -94,3 +94,7 @@ All `/pos-sales` endpoints require an admin access token. Create a completed cou
 ## Sales returns
 
 Sales returns use `/sales-returns` and require an admin access token. `POST /sales-returns` accepts either a completed `pos_sale` or delivered `ecommerce_order`, then restores the returned products to the original warehouse. It prevents returning more than the original sold quantity across all prior completed returns. Use `GET /sales-returns` for history and `PATCH /sales-returns/:id/cancel` to reverse an accidental return only when the returned stock remains available.
+
+## Employee requests
+
+Employee management uses admin-only CRUD at `/employees`. Creating or updating an employee accepts JSON or `multipart/form-data`; when uploading a photo, use an `image` File field. An employee has `firstName`, optional `lastName`, `phone`, optional `gender`, `email`, `role` (job designation such as `Cashier` or `Manager`), `password`, and optional `isActive`. Passwords are bcrypt-hashed and never returned by any API. `DELETE /employees/:id` is a safe deactivation, not a database delete. Employees log in with `POST /auth/employee/login`; their system access role is `employee`, so they cannot use admin-only APIs without a future permission module.
