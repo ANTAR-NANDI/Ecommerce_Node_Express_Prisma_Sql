@@ -5,6 +5,7 @@ import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
 import { publicImageUrl } from "../lib/public-image-url";
 import { requireAdmin, requireAuth } from "../middleware/auth";
+import { uploadProductImages } from "./uploads.routes";
 
 export const productsRouter = Router();
 
@@ -43,6 +44,24 @@ const productFields = z.object({
 
 const createInput = productFields;
 const updateInput = productFields.partial();
+
+function arrayField(value: unknown) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try { return JSON.parse(value); } catch { return value.split(",").map(item => item.trim()).filter(Boolean); }
+}
+
+// Supports both JSON (uploaded filenames) and multipart/form-data (actual image files).
+function requestInput(req: any) {
+  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+  return {
+    ...req.body,
+    colorIds: arrayField(req.body?.colorIds),
+    sizeIds: arrayField(req.body?.sizeIds),
+    thumbnailImages: files?.thumbnailImages?.map(file => file.filename) ?? arrayField(req.body?.thumbnailImages),
+    additionalImages: files?.additionalImages?.map(file => file.filename) ?? arrayField(req.body?.additionalImages),
+  };
+}
 
 const productSelect = `SELECT p.id, p.name, p.slug, p.short_description AS shortDescription, p.description,
   p.category_id AS categoryId, c.name AS categoryName, p.subcategory_id AS subcategoryId, sc.name AS subcategoryName,
@@ -105,8 +124,8 @@ productsRouter.get("/:id", asyncHandler(async (req, res) => {
   res.json({ success: true, data: product });
 }));
 
-productsRouter.post("/", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
-  const input = createInput.parse(req.body); const connection = await db.getConnection();
+productsRouter.post("/", requireAuth, requireAdmin, uploadProductImages.fields([{ name: "thumbnailImages", maxCount: 5 }, { name: "additionalImages", maxCount: 5 }]), asyncHandler(async (req, res) => {
+  const input = createInput.parse(requestInput(req)); const connection = await db.getConnection();
   try {
     await connection.beginTransaction(); await ensureSubcategoryMatches(connection, input.categoryId, input.subcategoryId);
     const [result] = await connection.execute<any>(`INSERT INTO products (name, slug, short_description, description, category_id, subcategory_id, brand_id, unit_id, sku, weight_kg, buying_price, selling_price, discount_type, discount, stock_quantity, meta_title, meta_description, meta_keywords, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [input.name, input.slug, input.shortDescription, input.description, input.categoryId, input.subcategoryId ?? null, input.brandId ?? null, input.unitId ?? null, input.sku ?? null, input.weightKg ?? null, input.buyingPrice, input.sellingPrice, input.discountType ?? "none", input.discount ?? 0, input.stockQuantity ?? 0, input.metaTitle ?? null, input.metaDescription ?? null, input.metaKeywords ?? null, input.isActive ?? true]);
@@ -115,8 +134,8 @@ productsRouter.post("/", requireAuth, requireAdmin, asyncHandler(async (req, res
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
 
-productsRouter.patch("/:id", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
-  const productId = id.parse(req.params.id); const input = updateInput.parse(req.body); if (!Object.keys(input).length) throw new HttpError(400, "Provide at least one field to update");
+productsRouter.patch("/:id", requireAuth, requireAdmin, uploadProductImages.fields([{ name: "thumbnailImages", maxCount: 5 }, { name: "additionalImages", maxCount: 5 }]), asyncHandler(async (req, res) => {
+  const productId = id.parse(req.params.id); const input = updateInput.parse(requestInput(req)); if (!Object.keys(input).length) throw new HttpError(400, "Provide at least one field to update");
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction(); const current = await productDetails(req, productId, connection); if (!current) throw new HttpError(404, "Product not found");
