@@ -23,7 +23,7 @@ Browsers can call the API only from origins in `CORS_ORIGIN`. Locally, it defaul
 
 ## Authentication flow
 
-`POST /auth/admin/login` with `{ "email", "password" }` returns an access token (15 minutes) and refresh token (7 days). Send the access token in `Authorization: Bearer ...` for `/auth/me` and all category/subcategory writes. When the access token expires, send the refresh token to `/auth/refresh`; it returns a new pair and invalidates the old refresh token. `/auth/logout` revokes the submitted refresh token.
+`POST /auth/admin/login` with `{ "email", "password" }` returns an access token (1 hour) and refresh token (7 days). Send the access token in `Authorization: Bearer ...` for `/auth/me` and all protected writes. When the access token expires, send the refresh token to `/auth/refresh`; it returns a new pair and invalidates the old refresh token. `/auth/logout` revokes the submitted refresh token.
 
 `/auth/forgot-password` deliberately returns the same message for any email so attackers cannot discover registered accounts. In development it also returns `developmentResetToken`; production should email that value in a reset link. Send `{ "token", "password" }` to `/auth/reset-password`.
 

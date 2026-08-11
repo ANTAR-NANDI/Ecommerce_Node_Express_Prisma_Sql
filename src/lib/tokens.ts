@@ -5,7 +5,7 @@ import { env } from "../config/env";
 export type JwtPayload = { userId: number; email: string; role: "admin" | "customer" };
 
 export const makeAccessToken = (payload: JwtPayload) =>
-  jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: "15m" });
+  jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: "1h" });
 
 export const makeRefreshToken = (payload: JwtPayload) =>
   jwt.sign(payload, env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
