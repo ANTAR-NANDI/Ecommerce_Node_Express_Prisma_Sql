@@ -66,3 +66,7 @@ Products use `/products` CRUD. Upload files first using `POST /uploads/products`
 ## Supplier, warehouse, and purchase requests
 
 Suppliers and warehouses each provide CRUD at `/suppliers` and `/warehouses`. `GET /warehouses/:id/stocks` returns current stock in a selected warehouse. Create a received purchase with `POST /purchases`; it accepts one supplier, one warehouse, and an `items` array of products. It increases the warehouse stock and total product stock in one database transaction. Purchases are audit records: use `PATCH /purchases/:id/cancel` to reverse a received purchase rather than deleting it.
+
+## Purchase return requests
+
+Purchase returns use `/purchase-returns`. Create a return from the original `purchaseId` with product quantities and a reason. The API derives the supplier and warehouse from the original purchase, rejects quantities greater than the received-minus-previously-returned amount, and reduces stock. Use `PATCH /purchase-returns/:id/cancel` to restore stock if a return is cancelled.
