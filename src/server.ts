@@ -6,8 +6,11 @@ import { env } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { authRouter } from "./routes/auth.routes";
 import { brandsRouter } from "./routes/brands.routes";
+import { colorsRouter } from "./routes/colors.routes";
 import { categoriesRouter } from "./routes/categories.routes";
 import { subcategoriesRouter } from "./routes/subcategories.routes";
+import { sizesRouter } from "./routes/sizes.routes";
+import { unitsRouter } from "./routes/units.routes";
 import { uploadsRouter } from "./routes/uploads.routes";
 
 const app = express();
@@ -36,8 +39,11 @@ app.get("/health", (_req, res) => {
 
 app.use("/auth", authRouter);
 app.use("/brands", brandsRouter);
+app.use("/colors", colorsRouter);
 app.use("/categories", categoriesRouter);
 app.use("/subcategories", subcategoriesRouter);
+app.use("/sizes", sizesRouter);
+app.use("/units", unitsRouter);
 app.use("/uploads", uploadsRouter);
 
 app.use(notFoundHandler);

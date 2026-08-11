@@ -54,3 +54,7 @@ Subcategories work the same way: submit `POST /subcategories` as `multipart/form
 `GET /brands` and `GET /brands/:id` are public. Admin-only CRUD uses `POST`, `PATCH`, and `DELETE` on `/brands`. A brand accepts `name`, a lowercase `slug`, optional `logoUrl`, optional `description`, and optional `isActive`.
 
 Create a brand with `multipart/form-data`: send `name`, `slug`, optional `description`, optional `isActive`, and an `image` File to `POST /brands`. Brand images are saved in `uploads/brands`.
+
+## Color, size, and unit requests
+
+Each module has standard CRUD at `/colors`, `/sizes`, and `/units`. Reads are public; create, update, and delete require an admin access token. Colors accept `{ "name": "Red", "code": "#FF0000", "isActive": true }`; sizes and units accept `{ "name": "S", "isActive": true }` and `{ "name": "KG", "isActive": true }`.
