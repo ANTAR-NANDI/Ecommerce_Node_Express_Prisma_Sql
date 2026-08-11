@@ -82,3 +82,7 @@ Create a stock request at `/warehouse-requisitions`, then approve it and create 
 ## Stock adjustment and report requests
 
 Create an audited stock correction with `POST /stock-adjustments`; each item has a positive `quantityChange` for found/extra stock or a negative quantity for damaged/lost stock. `GET /stock-reports?warehouseId=1&productId=1&dateFrom=2026-08-01&dateTo=2026-08-31` returns current stock balances and all matching stock movements.
+
+## POS sales and sales history
+
+All `/pos-sales` endpoints require an admin access token. Create a completed counter sale with `POST /pos-sales`. It reduces the selected warehouse's stock and the product's total stock in one database transaction. `customerId` is optional; send `null` for a walk-in customer. Read sales history with `GET /pos-sales`, optionally filtering by `warehouseId`, `customerId`, `status`, `dateFrom`, and `dateTo`. Use `PATCH /pos-sales/:id/cancel` only to void the complete sale; it restores all of the sale's stock. A partial customer return will be handled separately as a sales-return module.
