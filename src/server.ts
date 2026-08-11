@@ -7,6 +7,7 @@ import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { authRouter } from "./routes/auth.routes";
 import { brandsRouter } from "./routes/brands.routes";
 import { colorsRouter } from "./routes/colors.routes";
+import { productsRouter } from "./routes/products.routes";
 import { categoriesRouter } from "./routes/categories.routes";
 import { subcategoriesRouter } from "./routes/subcategories.routes";
 import { sizesRouter } from "./routes/sizes.routes";
@@ -31,6 +32,7 @@ app.use(express.json());
 app.use("/uploads/category", express.static(path.resolve("uploads", "categories")));
 app.use("/uploads/subcategory", express.static(path.resolve("uploads", "subcategories")));
 app.use("/uploads/brand", express.static(path.resolve("uploads", "brands")));
+app.use("/uploads/product", express.static(path.resolve("uploads", "products")));
 app.use("/uploads", express.static(path.resolve("uploads")));
 
 app.get("/health", (_req, res) => {
@@ -40,6 +42,7 @@ app.get("/health", (_req, res) => {
 app.use("/auth", authRouter);
 app.use("/brands", brandsRouter);
 app.use("/colors", colorsRouter);
+app.use("/products", productsRouter);
 app.use("/categories", categoriesRouter);
 app.use("/subcategories", subcategoriesRouter);
 app.use("/sizes", sizesRouter);

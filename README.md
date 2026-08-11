@@ -58,3 +58,7 @@ Create a brand with `multipart/form-data`: send `name`, `slug`, optional `descri
 ## Color, size, and unit requests
 
 Each module has standard CRUD at `/colors`, `/sizes`, and `/units`. Reads are public; create, update, and delete require an admin access token. Colors accept `{ "name": "Red", "code": "#FF0000", "isActive": true }`; sizes and units accept `{ "name": "S", "isActive": true }` and `{ "name": "KG", "isActive": true }`.
+
+## Product requests
+
+Products use `/products` CRUD. Upload files first using `POST /uploads/products` as `multipart/form-data`, with up to five `thumbnailImages` files and five `additionalImages` files. Use the returned filenames in `thumbnailImages` and `additionalImages` when creating the product. A product can have multiple `colorIds` and `sizeIds`; `categoryId` is required and `subcategoryId` must belong to that category. List filters: `?categoryId=1&subcategoryId=2&brandId=1&colorId=1&sizeId=1`.
