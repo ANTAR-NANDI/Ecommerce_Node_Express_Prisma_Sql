@@ -17,6 +17,8 @@ import { suppliersRouter } from "./routes/suppliers.routes";
 import { sizesRouter } from "./routes/sizes.routes";
 import { unitsRouter } from "./routes/units.routes";
 import { warehousesRouter } from "./routes/warehouses.routes";
+import { warehouseRequisitionsRouter } from "./routes/warehouse-requisitions.routes";
+import { warehouseTransfersRouter } from "./routes/warehouse-transfers.routes";
 import { uploadsRouter } from "./routes/uploads.routes";
 
 const app = express();
@@ -57,6 +59,8 @@ app.use("/sizes", sizesRouter);
 app.use("/units", unitsRouter);
 app.use("/suppliers", suppliersRouter);
 app.use("/warehouses", warehousesRouter);
+app.use("/warehouse-requisitions", warehouseRequisitionsRouter);
+app.use("/warehouse-transfers", warehouseTransfersRouter);
 app.use("/uploads", uploadsRouter);
 
 app.use(notFoundHandler);

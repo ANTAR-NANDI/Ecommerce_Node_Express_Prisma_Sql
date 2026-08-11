@@ -74,3 +74,7 @@ Purchase returns use `/purchase-returns`. Create a return from the original `pur
 ## Customer requests
 
 Customer data is private, so every `/customers` endpoint requires an admin access token. Standard CRUD is available and `GET /customers?search=phone-or-name` supports customer selection in POS and order screens.
+
+## Warehouse requisition and transfer requests
+
+Create a stock request at `/warehouse-requisitions`, then approve it and create a linked draft `/warehouse-transfers` record using its `requisitionId`. Ship a transfer to remove stock from the source warehouse; receive it to add stock to the destination warehouse. Total product stock does not change during a transfer because the stock only moves between warehouses.
