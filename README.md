@@ -70,3 +70,7 @@ Suppliers and warehouses each provide CRUD at `/suppliers` and `/warehouses`. `G
 ## Purchase return requests
 
 Purchase returns use `/purchase-returns`. Create a return from the original `purchaseId` with product quantities and a reason. The API derives the supplier and warehouse from the original purchase, rejects quantities greater than the received-minus-previously-returned amount, and reduces stock. Use `PATCH /purchase-returns/:id/cancel` to restore stock if a return is cancelled.
+
+## Customer requests
+
+Customer data is private, so every `/customers` endpoint requires an admin access token. Standard CRUD is available and `GET /customers?search=phone-or-name` supports customer selection in POS and order screens.

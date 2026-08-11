@@ -7,6 +7,7 @@ import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { authRouter } from "./routes/auth.routes";
 import { brandsRouter } from "./routes/brands.routes";
 import { colorsRouter } from "./routes/colors.routes";
+import { customersRouter } from "./routes/customers.routes";
 import { productsRouter } from "./routes/products.routes";
 import { purchasesRouter } from "./routes/purchases.routes";
 import { purchaseReturnsRouter } from "./routes/purchase-returns.routes";
@@ -46,6 +47,7 @@ app.get("/health", (_req, res) => {
 app.use("/auth", authRouter);
 app.use("/brands", brandsRouter);
 app.use("/colors", colorsRouter);
+app.use("/customers", customersRouter);
 app.use("/products", productsRouter);
 app.use("/purchases", purchasesRouter);
 app.use("/purchase-returns", purchaseReturnsRouter);
