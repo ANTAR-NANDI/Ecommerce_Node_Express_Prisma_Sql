@@ -8,6 +8,7 @@ import { requireAdmin, requireAuth } from "./middleware/auth";
 import { authRouter } from "./routes/auth.routes";
 import { brandsRouter } from "./routes/brands.routes";
 import { colorsRouter } from "./routes/colors.routes";
+import { contactUsRouter } from "./routes/contact-us.routes";
 import { customersRouter } from "./routes/customers.routes";
 import { dashboardRouter } from "./routes/dashboard.routes";
 import { employeesRouter } from "./routes/employees.routes";
@@ -79,12 +80,14 @@ app.use("/auth", authRouter);
 app.use("/categories", publicCategoriesOnly, categoriesRouter);
 app.use("/products", publicProductsOnly, productsRouter);
 app.use("/brands", publicBrandsOnly, brandsRouter);
+app.use("/contact-us", publicCategoriesOnly, contactUsRouter);
 app.use("/ecommerce-orders", publicCheckoutOnly, ecommerceOrdersRouter);
 
 // Every management API is protected at the prefix, including operational read routes.
 app.use("/admin", requireAuth, requireAdmin);
 app.use("/admin/brands", brandsRouter);
 app.use("/admin/colors", colorsRouter);
+app.use("/admin/contact-us", contactUsRouter);
 app.use("/admin/customers", customersRouter);
 app.use("/admin/dashboard", dashboardRouter);
 app.use("/admin/employees", employeesRouter);

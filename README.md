@@ -25,6 +25,10 @@ Browsers can call the API only from origins in `CORS_ORIGIN`. Locally, it defaul
 
 All management routes use the `/admin` prefix, such as `/admin/categories`, `/admin/products`, `/admin/customers`, and `/admin/uploads/products`. Public shop endpoints remain unprefixed: `GET /categories`, `GET /brands`, `GET /products`, `GET /products/:id`, and `/products/:id/favorites`. `POST /products/:id/favorites` toggles the customer's favorite state.
 
+## Contact Us
+
+`GET /contact-us` is public and returns the configured contact details. The admin panel uses `GET /admin/contact-us` and `POST /admin/contact-us` with `phoneNumber`, `whatsappNumber`, `messengerLink`, `email`, and `address`. Only one Contact Us settings record can be created.
+
 ## API route prefixes
 
 All management routes use the `/admin` prefix, for example `/admin/categories`, `/admin/products`, `/admin/customers`, and `/admin/uploads/products`. Public shop endpoints remain unprefixed: `GET /categories`, `GET /products`, `GET /products/:id`, and product favorite actions at `/products/:id/favorites`.
