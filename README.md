@@ -51,9 +51,9 @@ Subcategories work the same way: submit `POST /subcategories` as `multipart/form
 
 ## Brand requests
 
-`GET /brands` and `GET /brands/:id` are public. Admin-only CRUD uses `POST`, `PATCH`, and `DELETE` on `/brands`. A brand accepts `name`, a lowercase `slug`, optional `logoUrl`, optional `description`, and optional `isActive`.
+`GET /brands` and `GET /brands/:id` are public. Admin-only CRUD uses `POST`, `PATCH`, and `DELETE` on `/brands`. A brand accepts `name`, a lowercase `slug`, optional `image`, and optional `isActive`.
 
-Create a brand with `multipart/form-data`: send `name`, `slug`, optional `description`, optional `isActive`, and an `image` File to `POST /brands`. Brand images are saved in `uploads/brands`.
+Create a brand with `multipart/form-data`: send `name`, `slug`, optional `isActive`, and an `image` File to `POST /brands`. Brand images are saved in `uploads/brands`.
 
 ## Color, size, and unit requests
 

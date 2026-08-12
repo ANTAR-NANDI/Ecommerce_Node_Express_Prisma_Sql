@@ -15,11 +15,10 @@ const brandInput = z.object({
   name: z.string().trim().min(2).max(100),
   slug: z.string().trim().min(2).max(120).regex(/^[a-z0-9-]+$/, "Slug may contain only lowercase letters, numbers, and hyphens"),
   image: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.(jpg|jpeg|png|webp|gif)$/i, "Image must be an uploaded image filename").nullable().optional(),
-  description: z.string().trim().max(2000).nullable().optional(),
   isActive: boolean.optional(),
 });
 
-const select = "SELECT id, name, slug, logo_url AS image, description, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt FROM brands";
+const select = "SELECT id, name, slug, logo_url AS image, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt FROM brands";
 
 brandsRouter.get("/", asyncHandler(async (_req, res) => {
   const [rows] = await db.query(`${select} ORDER BY name`);
@@ -35,8 +34,8 @@ brandsRouter.get("/:id", asyncHandler(async (req, res) => {
 brandsRouter.post("/", requireAuth, requireAdmin, uploadBrandImage.single("image"), asyncHandler(async (req, res) => {
   const input = brandInput.parse({ ...req.body, image: req.file?.filename ?? req.body?.image });
   const [result] = await db.execute<any>(
-    "INSERT INTO brands (name, slug, logo_url, description, is_active) VALUES (?, ?, ?, ?, ?)",
-    [input.name, input.slug, input.image ?? null, input.description ?? null, input.isActive ?? true],
+    "INSERT INTO brands (name, slug, logo_url, is_active) VALUES (?, ?, ?, ?)",
+    [input.name, input.slug, input.image ?? null, input.isActive ?? true],
   );
   const [rows] = await db.execute<any[]>(`${select} WHERE id = ?`, [result.insertId]);
   res.status(201).json({ success: true, data: withImageUrl(req, rows[0]) });
@@ -45,7 +44,7 @@ brandsRouter.post("/", requireAuth, requireAdmin, uploadBrandImage.single("image
 brandsRouter.patch("/:id", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   const input = brandInput.partial().parse(req.body);
   if (!Object.keys(input).length) throw new HttpError(400, "Provide at least one field to update");
-  const columnNames: Record<string, string> = { name: "name", slug: "slug", image: "logo_url", description: "description", isActive: "is_active" };
+  const columnNames: Record<string, string> = { name: "name", slug: "slug", image: "logo_url", isActive: "is_active" };
   const fields = Object.entries(input).map(([key, value]) => ({ name: columnNames[key]!, value }));
   const [result] = await db.query<any>(`UPDATE brands SET ${fields.map(field => `${field.name} = ?`).join(", ")} WHERE id = ?`, [...fields.map(field => field.value), Number(req.params.id)] as any);
   if (!result.affectedRows) throw new HttpError(404, "Brand not found");
