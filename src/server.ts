@@ -18,6 +18,7 @@ import { productsRouter } from "./routes/products.routes";
 import { purchasesRouter } from "./routes/purchases.routes";
 import { purchaseReturnsRouter } from "./routes/purchase-returns.routes";
 import { posSalesRouter } from "./routes/pos-sales.routes";
+import { promotionsRouter } from "./routes/promotions.routes";
 import { categoriesRouter } from "./routes/categories.routes";
 import { subcategoriesRouter } from "./routes/subcategories.routes";
 import { suppliersRouter } from "./routes/suppliers.routes";
@@ -71,6 +72,7 @@ app.use("/uploads/supplier", express.static(path.resolve("uploads", "suppliers")
 app.use("/uploads/customer", express.static(path.resolve("uploads", "customers")));
 app.use("/uploads/employee", express.static(path.resolve("uploads", "employees")));
 app.use("/uploads/product", express.static(path.resolve("uploads", "products")));
+app.use("/uploads/promotion", express.static(path.resolve("uploads", "promotions")));
 app.use("/uploads", express.static(path.resolve("uploads")));
 
 app.get("/health", (_req, res) => {
@@ -83,6 +85,7 @@ app.use("/categories", publicCategoriesOnly, categoriesRouter);
 app.use("/products", publicProductsOnly, productsRouter);
 app.use("/brands", publicBrandsOnly, brandsRouter);
 app.use("/blogs", publicCategoriesOnly, blogsRouter);
+app.use("/", promotionsRouter);
 app.use("/contact-us", publicCategoriesOnly, contactUsRouter);
 app.use("/ecommerce-orders", publicCheckoutOnly, ecommerceOrdersRouter);
 
@@ -90,6 +93,7 @@ app.use("/ecommerce-orders", publicCheckoutOnly, ecommerceOrdersRouter);
 app.use("/admin", requireAuth, requireAdmin);
 app.use("/admin/brands", brandsRouter);
 app.use("/admin/blogs", blogsRouter);
+app.use("/admin", promotionsRouter);
 app.use("/admin/colors", colorsRouter);
 app.use("/admin/contact-us", contactUsRouter);
 app.use("/admin/customers", customersRouter);

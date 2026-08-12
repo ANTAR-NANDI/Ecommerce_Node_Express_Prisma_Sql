@@ -33,6 +33,10 @@ All management routes use the `/admin` prefix, such as `/admin/categories`, `/ad
 
 Public blog APIs are `GET /blogs` and `GET /blogs/:id`; they return active blogs and support `?category=News&page=1&limit=12`. Admin CRUD is at `/admin/blogs`. A blog accepts `title`, lowercase `slug`, `category`, `tags` (string array), `description`, optional `image`, and optional `isActive`. Send an `image` File in `multipart/form-data`, or upload first through `POST /admin/uploads/blogs`.
 
+## Promotions
+
+Promotion resources have admin CRUD at `/admin/flash-sales`, `/admin/banners`, `/admin/ad-campaigns`, and `/admin/promo-codes`; each accepts and returns `isActive`. Public frontend fetches are `GET /flash-sales`, `GET /banners`, `GET /ad-campaigns`, and `GET /promo-codes`, which return only active records. Promotion images use the `image` field or `POST /admin/uploads/promotions`.
+
 ## API route prefixes
 
 All management routes use the `/admin` prefix, for example `/admin/categories`, `/admin/products`, `/admin/customers`, and `/admin/uploads/products`. Public shop endpoints remain unprefixed: `GET /categories`, `GET /products`, `GET /products/:id`, and product favorite actions at `/products/:id/favorites`.
