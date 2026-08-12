@@ -33,7 +33,7 @@ const updateInput = z.object({
   isActive: boolean.optional(),
 });
 const select = `SELECT e.id, e.user_id AS userId, e.first_name AS firstName, e.last_name AS lastName,
-  e.phone, e.gender, e.image_url AS image, u.email, e.employee_role AS role,
+  e.phone, e.gender, e.image AS image, u.email, e.employee_role AS role,
   e.is_active AS isActive, e.created_at AS createdAt, e.updated_at AS updatedAt
   FROM employees e JOIN users u ON u.id = e.user_id`;
 
@@ -69,7 +69,7 @@ employeesRouter.post("/", uploadEmployeeImage.single("image"), asyncHandler(asyn
     await connection.beginTransaction();
     const fullName = [input.firstName, input.lastName].filter(Boolean).join(" ");
     const [user] = await connection.execute<any>("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, 'employee')", [fullName, input.email, await bcrypt.hash(input.password, 12)]);
-    const [employee] = await connection.execute<any>(`INSERT INTO employees (user_id, first_name, last_name, phone, gender, image_url, employee_role, is_active)
+    const [employee] = await connection.execute<any>(`INSERT INTO employees (user_id, first_name, last_name, phone, gender, image, employee_role, is_active)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [user.insertId, input.firstName, input.lastName ?? null, input.phone, input.gender ?? null, req.file?.filename ?? null, input.role, input.isActive]);
     await connection.commit(); res.status(201).json({ success: true, data: await employeeById(employee.insertId, req, connection) });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
@@ -87,7 +87,7 @@ employeesRouter.patch("/:id", uploadEmployeeImage.single("image"), asyncHandler(
     const email = input.email ?? existing.email; const role = input.role ?? existing.role; const isActive = input.isActive ?? Boolean(existing.isActive);
     const image = req.file?.filename ?? existing.image?.split("/").pop() ?? null;
     await connection.execute("UPDATE users SET name = ?, email = ?, password_hash = COALESCE(?, password_hash) WHERE id = ?", [[firstName, lastName].filter(Boolean).join(" "), email, input.password ? await bcrypt.hash(input.password, 12) : null, existing.userId]);
-    await connection.execute("UPDATE employees SET first_name = ?, last_name = ?, phone = ?, gender = ?, image_url = ?, employee_role = ?, is_active = ? WHERE id = ?", [firstName, lastName, phone, gender, image, role, isActive, employeeId]);
+    await connection.execute("UPDATE employees SET first_name = ?, last_name = ?, phone = ?, gender = ?, image = ?, employee_role = ?, is_active = ? WHERE id = ?", [firstName, lastName, phone, gender, image, role, isActive, employeeId]);
     await connection.commit(); res.json({ success: true, data: await employeeById(employeeId, req, connection) });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
