@@ -16,6 +16,11 @@ const nullableId = z.preprocess(value => value === "" ? null : value, id.nullabl
 const nullableNumber = z.preprocess(value => value === "" ? null : value, z.coerce.number().nonnegative().nullable().optional());
 const optionalText = z.preprocess(value => value === "" ? null : value, z.string().trim().max(500).nullable().optional());
 const sizeWithExtraPrice = z.object({ sizeId: id, extraPrice: z.coerce.number().nonnegative().default(0) });
+const subcategoryIds = z.preprocess(value => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return value;
+  try { return JSON.parse(value); } catch { return value.split(",").map(item => item.trim()).filter(Boolean); }
+}, z.array(id).max(100));
 const publicListQuery = z.object({ search: z.string().trim().max(200).optional(), categoryId: id.optional(), subcategoryId: id.optional(), brandId: id.optional(), page: z.coerce.number().int().positive().default(1), limit: z.coerce.number().int().min(1).max(100).default(12) });
 
 const productFields = z.object({
@@ -24,7 +29,7 @@ const productFields = z.object({
   shortDescription: z.string().trim().min(2).max(500),
   description: z.string().trim().min(2),
   categoryId: id,
-  subcategoryId: nullableId,
+  subcategoryIds: subcategoryIds.optional(),
   brandId: nullableId,
   colorIds: z.array(id).max(20).optional(),
   unitId: nullableId,
@@ -61,6 +66,7 @@ function requestInput(req: any) {
   return {
     ...req.body,
     colorIds: arrayField(req.body?.colorIds),
+    subcategoryIds: arrayField(req.body?.subcategoryIds),
     sizes: arrayField(req.body?.sizes),
     sizeIds: arrayField(req.body?.sizeIds),
     thumbnailImages: files?.thumbnailImages?.map(file => file.filename) ?? arrayField(req.body?.thumbnailImages),
@@ -87,6 +93,7 @@ async function productDetails(req: any, productId: number, connection: any = db)
   if (!product) return null;
   const [colors] = await connection.execute("SELECT c.id, c.name, c.code FROM product_colors pc JOIN colors c ON c.id = pc.color_id WHERE pc.product_id = ? ORDER BY c.name", [productId]);
   const [sizes] = await connection.execute("SELECT s.id, s.name, ps.extra_price AS extraPrice FROM product_sizes ps JOIN sizes s ON s.id = ps.size_id WHERE ps.product_id = ? ORDER BY s.name", [productId]);
+  const [subcategories] = await connection.execute("SELECT s.id, s.name, s.slug FROM product_subcategories ps JOIN subcategories s ON s.id = ps.subcategory_id WHERE ps.product_id = ? ORDER BY s.name", [productId]);
   const [images] = await connection.execute("SELECT filename, image_type AS imageType FROM product_images WHERE product_id = ? ORDER BY image_type, sort_order, id", [productId]);
   const price = Number(product.sellingPrice);
   const discountedPrice = product.discountType === "percent" ? Math.max(0, price - price * Number(product.discount) / 100) : product.discountType === "fixed" ? Math.max(0, price - Number(product.discount)) : price;
@@ -95,16 +102,24 @@ async function productDetails(req: any, productId: number, connection: any = db)
     price,
     discountedPrice,
     colors,
+    subcategoryIds: (subcategories as any[]).map(subcategory => subcategory.id),
+    subcategories,
     sizes: (sizes as any[]).map(size => ({ ...size, extraPrice: Number(size.extraPrice), price: discountedPrice + Number(size.extraPrice) })),
     thumbnailImages: (images as any[]).filter(image => image.imageType === "thumbnail").map(image => publicImageUrl(req, "product", image.filename)),
     additionalImages: (images as any[]).filter(image => image.imageType === "additional").map(image => publicImageUrl(req, "product", image.filename)),
   };
 }
 
-async function ensureSubcategoryMatches(connection: any, categoryId: number, subcategoryId: number | null | undefined) {
-  if (!subcategoryId) return;
-  const [rows] = await connection.execute("SELECT subcategory_id FROM subcategory_categories WHERE subcategory_id = ? AND category_id = ?", [subcategoryId, categoryId]);
-  if (!rows[0]) throw new HttpError(400, "The selected subcategory does not belong to the selected category");
+async function ensureSubcategoryMatches(connection: any, categoryId: number, subcategoryIds: number[]) {
+  for (const subcategoryId of subcategoryIds) {
+    const [rows] = await connection.execute("SELECT subcategory_id FROM subcategory_categories WHERE subcategory_id = ? AND category_id = ?", [subcategoryId, categoryId]);
+    if (!rows[0]) throw new HttpError(400, `Subcategory ID ${subcategoryId} does not belong to the selected category`);
+  }
+}
+
+async function replaceSubcategories(connection: any, productId: number, ids: number[]) {
+  await connection.execute("DELETE FROM product_subcategories WHERE product_id = ?", [productId]);
+  for (const subcategoryId of [...new Set(ids)]) await connection.execute("INSERT INTO product_subcategories (product_id, subcategory_id) VALUES (?, ?)", [productId, subcategoryId]);
 }
 
 function productSizes(input: { sizes?: { sizeId: number; extraPrice: number }[] | undefined; sizeIds?: number[] | undefined }) {
@@ -126,7 +141,7 @@ productsRouter.get("/", asyncHandler(async (req, res) => {
     const query = publicListQuery.parse(req.query);
     const filters = ["p.is_active = TRUE"]; const values: Array<string | number> = [];
     if (query.categoryId) { filters.push("p.category_id = ?"); values.push(query.categoryId); }
-    if (query.subcategoryId) { filters.push("p.subcategory_id = ?"); values.push(query.subcategoryId); }
+    if (query.subcategoryId) { filters.push("EXISTS (SELECT 1 FROM product_subcategories public_ps WHERE public_ps.product_id = p.id AND public_ps.subcategory_id = ?)"); values.push(query.subcategoryId); }
     if (query.brandId) { filters.push("p.brand_id = ?"); values.push(query.brandId); }
     if (query.search) { filters.push("(p.name LIKE ? OR p.slug LIKE ? OR b.name LIKE ?)"); const search = `%${query.search}%`; values.push(search, search, search); }
     const joins = "FROM products p JOIN categories c ON c.id = p.category_id LEFT JOIN brands b ON b.id = p.brand_id";
@@ -148,7 +163,7 @@ productsRouter.get("/", asyncHandler(async (req, res) => {
   const query = z.object({ categoryId: id.optional(), subcategoryId: id.optional(), brandId: id.optional(), colorId: id.optional(), sizeId: id.optional() }).parse(req.query);
   const clauses: string[] = []; const values: number[] = [];
   if (query.categoryId) { clauses.push("p.category_id = ?"); values.push(query.categoryId); }
-  if (query.subcategoryId) { clauses.push("p.subcategory_id = ?"); values.push(query.subcategoryId); }
+  if (query.subcategoryId) { clauses.push("EXISTS (SELECT 1 FROM product_subcategories filter_psc WHERE filter_psc.product_id = p.id AND filter_psc.subcategory_id = ?)"); values.push(query.subcategoryId); }
   if (query.brandId) { clauses.push("p.brand_id = ?"); values.push(query.brandId); }
   if (query.colorId) { clauses.push("EXISTS (SELECT 1 FROM product_colors filter_pc WHERE filter_pc.product_id = p.id AND filter_pc.color_id = ?)"); values.push(query.colorId); }
   if (query.sizeId) { clauses.push("EXISTS (SELECT 1 FROM product_sizes filter_ps WHERE filter_ps.product_id = p.id AND filter_ps.size_id = ?)"); values.push(query.sizeId); }
@@ -190,8 +205,9 @@ productsRouter.delete("/:id/favorites", asyncHandler(async (req, res) => {
 productsRouter.post("/", requireAuth, requireAdmin, uploadProductImages.fields([{ name: "thumbnailImages", maxCount: 5 }, { name: "additionalImages", maxCount: 5 }]), asyncHandler(async (req, res) => {
   const input = createInput.parse(requestInput(req)); const connection = await db.getConnection();
   try {
-    await connection.beginTransaction(); await ensureSubcategoryMatches(connection, input.categoryId, input.subcategoryId);
-    const [result] = await connection.execute<any>(`INSERT INTO products (name, slug, short_description, description, category_id, subcategory_id, brand_id, unit_id, sku, weight_kg, buying_price, selling_price, discount_type, discount, stock_quantity, meta_title, meta_description, meta_keywords, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [input.name, input.slug, input.shortDescription, input.description, input.categoryId, input.subcategoryId ?? null, input.brandId ?? null, input.unitId ?? null, input.sku ?? null, input.weightKg ?? null, input.buyingPrice, input.sellingPrice, input.discountType ?? "none", input.discount ?? 0, input.stockQuantity ?? 0, input.metaTitle ?? null, input.metaDescription ?? null, input.metaKeywords ?? null, input.isActive ?? true]);
+    await connection.beginTransaction(); await ensureSubcategoryMatches(connection, input.categoryId, input.subcategoryIds ?? []);
+    const [result] = await connection.execute<any>(`INSERT INTO products (name, slug, short_description, description, category_id, subcategory_id, brand_id, unit_id, sku, weight_kg, buying_price, selling_price, discount_type, discount, stock_quantity, meta_title, meta_description, meta_keywords, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [input.name, input.slug, input.shortDescription, input.description, input.categoryId, input.subcategoryIds?.[0] ?? null, input.brandId ?? null, input.unitId ?? null, input.sku ?? null, input.weightKg ?? null, input.buyingPrice, input.sellingPrice, input.discountType ?? "none", input.discount ?? 0, input.stockQuantity ?? 0, input.metaTitle ?? null, input.metaDescription ?? null, input.metaKeywords ?? null, input.isActive ?? true]);
+    await replaceSubcategories(connection, result.insertId, input.subcategoryIds ?? []);
     await addRelations(connection, result.insertId, input.colorIds ?? [], productSizes(input), input.thumbnailImages, input.additionalImages ?? []);
     await connection.commit(); const product = await productDetails(req, result.insertId, connection); res.status(201).json({ success: true, data: product });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
@@ -202,10 +218,11 @@ productsRouter.patch("/:id", requireAuth, requireAdmin, uploadProductImages.fiel
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction(); const current = await productDetails(req, productId, connection); if (!current) throw new HttpError(404, "Product not found");
-    const categoryId = input.categoryId ?? current.categoryId; const subcategoryId = input.subcategoryId === undefined ? current.subcategoryId : input.subcategoryId; await ensureSubcategoryMatches(connection, categoryId, subcategoryId);
-    const columns: Record<string, string> = { name: "name", slug: "slug", shortDescription: "short_description", description: "description", categoryId: "category_id", subcategoryId: "subcategory_id", brandId: "brand_id", unitId: "unit_id", sku: "sku", weightKg: "weight_kg", buyingPrice: "buying_price", sellingPrice: "selling_price", discountType: "discount_type", discount: "discount", stockQuantity: "stock_quantity", metaTitle: "meta_title", metaDescription: "meta_description", metaKeywords: "meta_keywords", isActive: "is_active" };
+    const categoryId = input.categoryId ?? current.categoryId; const selectedSubcategories = input.subcategoryIds ?? current.subcategoryIds; await ensureSubcategoryMatches(connection, categoryId, selectedSubcategories);
+    const columns: Record<string, string> = { name: "name", slug: "slug", shortDescription: "short_description", description: "description", categoryId: "category_id", brandId: "brand_id", unitId: "unit_id", sku: "sku", weightKg: "weight_kg", buyingPrice: "buying_price", sellingPrice: "selling_price", discountType: "discount_type", discount: "discount", stockQuantity: "stock_quantity", metaTitle: "meta_title", metaDescription: "meta_description", metaKeywords: "meta_keywords", isActive: "is_active" };
     const fields = Object.entries(input).filter(([key]) => columns[key]).map(([key, value]) => ({ column: columns[key]!, value }));
     if (fields.length) await connection.query(`UPDATE products SET ${fields.map(field => `${field.column} = ?`).join(", ")} WHERE id = ?`, [...fields.map(field => field.value), productId] as any);
+    if (input.subcategoryIds !== undefined) { await connection.execute("UPDATE products SET subcategory_id = ? WHERE id = ?", [input.subcategoryIds[0] ?? null, productId]); await replaceSubcategories(connection, productId, input.subcategoryIds); }
     if (input.colorIds !== undefined) { await connection.execute("DELETE FROM product_colors WHERE product_id = ?", [productId]); for (const colorId of [...new Set(input.colorIds)]) await connection.execute("INSERT INTO product_colors (product_id, color_id) VALUES (?, ?)", [productId, colorId]); }
     if (input.sizes !== undefined || input.sizeIds !== undefined) { await connection.execute("DELETE FROM product_sizes WHERE product_id = ?", [productId]); await addRelations(connection, productId, [], productSizes(input), [], []); }
     if (input.thumbnailImages !== undefined || input.additionalImages !== undefined) { await connection.execute("DELETE FROM product_images WHERE product_id = ?", [productId]); await addRelations(connection, productId, [], [], input.thumbnailImages ?? current.thumbnailImages.map((url: string) => url.split("/").pop()!), input.additionalImages ?? current.additionalImages.map((url: string) => url.split("/").pop()!)); }
