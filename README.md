@@ -39,7 +39,7 @@ Content-Type: application/json
 { "name": "Electronics", "slug": "electronics", "image": "category-image.jpg", "banner": "category-banner.jpg", "order": 0, "description": "Electronic devices and accessories", "isActive": true }
 ```
 
-Subcategories use the same fields plus `categoryId`. `GET /subcategories?categoryId=1` filters by category. Read endpoints are public; create, update, and delete endpoints require an admin token.
+Subcategories accept `categoryIds` (an array of one or more category IDs) to associate one subcategory with multiple categories. The legacy `categoryId` is still supported. They also accept optional `description`. `GET /subcategories?categoryId=1` filters by every category assigned to a subcategory. Read endpoints are public; create, update, and delete endpoints require an admin token.
 
 ## Category image upload
 

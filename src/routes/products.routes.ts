@@ -94,7 +94,7 @@ async function productDetails(req: any, productId: number, connection: any = db)
 
 async function ensureSubcategoryMatches(connection: any, categoryId: number, subcategoryId: number | null | undefined) {
   if (!subcategoryId) return;
-  const [rows] = await connection.execute("SELECT id FROM subcategories WHERE id = ? AND category_id = ?", [subcategoryId, categoryId]);
+  const [rows] = await connection.execute("SELECT subcategory_id FROM subcategory_categories WHERE subcategory_id = ? AND category_id = ?", [subcategoryId, categoryId]);
   if (!rows[0]) throw new HttpError(400, "The selected subcategory does not belong to the selected category");
 }
 
