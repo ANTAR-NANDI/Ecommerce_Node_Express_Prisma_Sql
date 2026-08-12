@@ -1,7 +1,6 @@
 CREATE TABLE suppliers (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(150) NOT NULL,
-  contact_person VARCHAR(100) NULL,
   phone VARCHAR(30) NULL,
   email VARCHAR(191) NULL,
   address TEXT NULL,
