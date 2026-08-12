@@ -63,7 +63,7 @@ Subcategories accept `categoryIds` (an array of one or more category IDs) to ass
 
 ## Category image upload
 
-Create a category with one `multipart/form-data` request: send `POST /categories` with text fields `name`, `slug`, optional `banner`, `order`, `description`, and `isActive`, plus an `image` **File** field and an admin access token. The backend saves the file, then stores its generated filename. `POST /uploads/categories` is also available when you want to upload first and later send the returned filename as `image` or `banner` in category JSON. Uploaded images are served at `/uploads/category/<filename>`.
+Create a category with one `multipart/form-data` request: send `POST /admin/categories` with text fields `name`, `slug`, optional `order`, `description`, and `isActive`, plus optional `image` and `banner` **File** fields and an admin access token. The backend saves both files when supplied. `POST /admin/uploads/categories` is also available when you want to upload first and later send the returned filename as `image` or `banner` in category JSON. Uploaded images are served at `/uploads/category/<filename>`.
 
 Local files are stored in `uploads/categories`. On Railway, attach a persistent Volume at `/app/uploads`, otherwise uploads are removed on the next deployment.
 
