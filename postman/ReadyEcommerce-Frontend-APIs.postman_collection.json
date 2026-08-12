@@ -1,0 +1,80 @@
+{
+  "info": {
+    "_postman_id": "e96a62b0-af5d-47c6-ac5d-e5f80dfc5f90",
+    "name": "ReadyEcommerce - Frontend Public APIs",
+    "description": "Public normal-user storefront APIs. No authorization header is required.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000" },
+    { "key": "categoryId", "value": "1" },
+    { "key": "subcategoryId", "value": "1" },
+    { "key": "brandId", "value": "1" },
+    { "key": "productId", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "1. Get Categories with Subcategories",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/categories",
+        "description": "Returns active categories with nested active subcategories, images, banners, and descriptions."
+      }
+    },
+    {
+      "name": "2. Get Products by Category",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/products?categoryId={{categoryId}}&page=1&limit=12",
+        "description": "Paginated active product cards for one category."
+      }
+    },
+    {
+      "name": "3. Get Brands",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/brands",
+        "description": "Returns active brands with name and image."
+      }
+    },
+    {
+      "name": "4. Get Products by Brand",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/products?brandId={{brandId}}&page=1&limit=12",
+        "description": "Paginated active product cards for one brand."
+      }
+    },
+    {
+      "name": "5. Search Products",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/products?search=electric&categoryId={{categoryId}}&page=1&limit=12",
+        "description": "Searches product name, slug, or brand name. Remove categoryId to search all categories."
+      }
+    },
+    {
+      "name": "5b. Get Products by Subcategory",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/products?subcategoryId={{subcategoryId}}&page=1&limit=12",
+        "description": "Paginated active products for a subcategory."
+      }
+    },
+    {
+      "name": "6. Get Product Details with Size Prices",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/products/{{productId}}",
+        "description": "Returns product details. Each sizes[] item includes extraPrice and its calculated final price."
+      }
+    }
+  ]
+}

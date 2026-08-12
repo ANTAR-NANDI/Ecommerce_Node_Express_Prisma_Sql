@@ -20,9 +20,10 @@ const brandInput = z.object({
 
 const select = "SELECT id, name, slug, logo_url AS image, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt FROM brands";
 
-brandsRouter.get("/", asyncHandler(async (_req, res) => {
-  const [rows] = await db.query(`${select} ORDER BY name`);
-  res.json({ success: true, data: (rows as any[]).map(row => withImageUrl(_req, row)) });
+brandsRouter.get("/", asyncHandler(async (req, res) => {
+  const where = req.baseUrl.startsWith("/admin/") ? "" : " WHERE is_active = TRUE";
+  const [rows] = await db.query(`${select}${where} ORDER BY name`);
+  res.json({ success: true, data: (rows as any[]).map(row => withImageUrl(req, row)) });
 }));
 
 brandsRouter.get("/:id", asyncHandler(async (req, res) => {

@@ -21,6 +21,14 @@ This is a TypeScript + Express + MySQL API. TypeScript adds type checks to JavaS
 
 Browsers can call the API only from origins in `CORS_ORIGIN`. Locally, it defaults to `http://localhost:5173` (Vite's usual development URL). In Railway, set `CORS_ORIGIN` to your deployed frontend URL. For more than one frontend, separate URLs with commas, for example `https://shop.example.com,https://admin.example.com`.
 
+## API route prefixes
+
+All management routes use the `/admin` prefix, such as `/admin/categories`, `/admin/products`, `/admin/customers`, and `/admin/uploads/products`. Public shop endpoints remain unprefixed: `GET /categories`, `GET /brands`, `GET /products`, `GET /products/:id`, and `/products/:id/favorites`.
+
+## API route prefixes
+
+All management routes use the `/admin` prefix, for example `/admin/categories`, `/admin/products`, `/admin/customers`, and `/admin/uploads/products`. Public shop endpoints remain unprefixed: `GET /categories`, `GET /products`, `GET /products/:id`, and product favorite actions at `/products/:id/favorites`.
+
 ## Authentication flow
 
 `POST /auth/admin/login` with `{ "email", "password" }` returns an access token (1 hour) and refresh token (7 days). Send the access token in `Authorization: Bearer ...` for `/auth/me` and all protected writes. When the access token expires, send the refresh token to `/auth/refresh`; it returns a new pair and invalidates the old refresh token. `/auth/logout` revokes the submitted refresh token.

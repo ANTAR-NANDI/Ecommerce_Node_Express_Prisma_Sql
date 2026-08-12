@@ -4,6 +4,7 @@ import express from "express";
 import path from "node:path";
 import { env } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
+import { requireAdmin, requireAuth } from "./middleware/auth";
 import { authRouter } from "./routes/auth.routes";
 import { brandsRouter } from "./routes/brands.routes";
 import { colorsRouter } from "./routes/colors.routes";
@@ -30,6 +31,23 @@ import { uploadsRouter } from "./routes/uploads.routes";
 
 const app = express();
 const allowedOrigins = env.CORS_ORIGIN.split(",").map(origin => origin.trim()).filter(Boolean);
+const publicCategoriesOnly = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.method === "GET") return next();
+  res.status(404).json({ success: false, message: "Not found" });
+};
+const publicProductsOnly = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const isFavorite = /^\/\d+\/favorites\/?$/.test(req.path) && ["POST", "DELETE"].includes(req.method);
+  if (req.method === "GET" || isFavorite) return next();
+  res.status(404).json({ success: false, message: "Not found" });
+};
+const publicCheckoutOnly = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.method === "POST" && (req.path === "/" || req.path === "")) return next();
+  res.status(404).json({ success: false, message: "Not found" });
+};
+const publicBrandsOnly = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.method === "GET") return next();
+  res.status(404).json({ success: false, message: "Not found" });
+};
 
 // Railway forwards HTTPS requests through a proxy; this preserves https in generated URLs.
 app.set("trust proxy", 1);
@@ -57,28 +75,36 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/auth", authRouter);
-app.use("/brands", brandsRouter);
-app.use("/colors", colorsRouter);
-app.use("/customers", customersRouter);
-app.use("/dashboard", dashboardRouter);
-app.use("/employees", employeesRouter);
-app.use("/ecommerce-orders", ecommerceOrdersRouter);
-app.use("/products", productsRouter);
-app.use("/purchases", purchasesRouter);
-app.use("/purchase-returns", purchaseReturnsRouter);
-app.use("/pos-sales", posSalesRouter);
-app.use("/categories", categoriesRouter);
-app.use("/subcategories", subcategoriesRouter);
-app.use("/sizes", sizesRouter);
-app.use("/stock-adjustments", stockAdjustmentsRouter);
-app.use("/stock-reports", stockReportsRouter);
-app.use("/sales-returns", salesReturnsRouter);
-app.use("/units", unitsRouter);
-app.use("/suppliers", suppliersRouter);
-app.use("/warehouses", warehousesRouter);
-app.use("/warehouse-requisitions", warehouseRequisitionsRouter);
-app.use("/warehouse-transfers", warehouseTransfersRouter);
-app.use("/uploads", uploadsRouter);
+// Public shop endpoints. Management operations are only available below /admin.
+app.use("/categories", publicCategoriesOnly, categoriesRouter);
+app.use("/products", publicProductsOnly, productsRouter);
+app.use("/brands", publicBrandsOnly, brandsRouter);
+app.use("/ecommerce-orders", publicCheckoutOnly, ecommerceOrdersRouter);
+
+// Every management API is protected at the prefix, including operational read routes.
+app.use("/admin", requireAuth, requireAdmin);
+app.use("/admin/brands", brandsRouter);
+app.use("/admin/colors", colorsRouter);
+app.use("/admin/customers", customersRouter);
+app.use("/admin/dashboard", dashboardRouter);
+app.use("/admin/employees", employeesRouter);
+app.use("/admin/ecommerce-orders", ecommerceOrdersRouter);
+app.use("/admin/products", productsRouter);
+app.use("/admin/purchases", purchasesRouter);
+app.use("/admin/purchase-returns", purchaseReturnsRouter);
+app.use("/admin/pos-sales", posSalesRouter);
+app.use("/admin/categories", categoriesRouter);
+app.use("/admin/subcategories", subcategoriesRouter);
+app.use("/admin/sizes", sizesRouter);
+app.use("/admin/stock-adjustments", stockAdjustmentsRouter);
+app.use("/admin/stock-reports", stockReportsRouter);
+app.use("/admin/sales-returns", salesReturnsRouter);
+app.use("/admin/units", unitsRouter);
+app.use("/admin/suppliers", suppliersRouter);
+app.use("/admin/warehouses", warehousesRouter);
+app.use("/admin/warehouse-requisitions", warehouseRequisitionsRouter);
+app.use("/admin/warehouse-transfers", warehouseTransfersRouter);
+app.use("/admin/uploads", uploadsRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

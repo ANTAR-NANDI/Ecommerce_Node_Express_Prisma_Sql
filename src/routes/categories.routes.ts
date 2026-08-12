@@ -26,8 +26,22 @@ const categoryInput = z.object({
 });
 
 categoriesRouter.get("/", asyncHandler(async (req, res) => {
-  const [rows] = await db.query("SELECT id, name, slug, image_url AS image, banner, `order`, description, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt FROM categories ORDER BY `order`, name");
-  res.json({ success: true, data: (rows as any[]).map(row => withImageUrls(req, row)) });
+  const isAdminRequest = req.baseUrl.startsWith("/admin/");
+  const [rows] = await db.query<any[]>(`SELECT id, name, slug, image_url AS image, banner, \`order\`, description, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt FROM categories${isAdminRequest ? "" : " WHERE is_active = TRUE"} ORDER BY \`order\`, name`);
+  const categoryIds = rows.map(category => category.id);
+  const subcategoriesByCategory = new Map<number, any[]>();
+  if (categoryIds.length) {
+    const [subcategories] = await db.execute<any[]>(`SELECT sc.category_id AS categoryId, s.id, s.name, s.slug, s.image_url AS image, s.description
+      FROM subcategory_categories sc JOIN subcategories s ON s.id = sc.subcategory_id
+      WHERE sc.category_id IN (${categoryIds.map(() => "?").join(", ")})${isAdminRequest ? "" : " AND s.is_active = TRUE"}
+      ORDER BY s.name`, categoryIds);
+    for (const subcategory of subcategories) {
+      const items = subcategoriesByCategory.get(subcategory.categoryId) ?? [];
+      items.push({ id: subcategory.id, name: subcategory.name, slug: subcategory.slug, image: publicImageUrl(req, "subcategory", subcategory.image), description: subcategory.description });
+      subcategoriesByCategory.set(subcategory.categoryId, items);
+    }
+  }
+  res.json({ success: true, data: rows.map(category => ({ ...withImageUrls(req, category), subcategories: subcategoriesByCategory.get(category.id) ?? [] })) });
 }));
 categoriesRouter.get("/:id", asyncHandler(async (req, res) => {
   const [rows] = await db.execute<any[]>("SELECT id, name, slug, image_url AS image, banner, `order`, description, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt FROM categories WHERE id = ?", [Number(req.params.id)]);
