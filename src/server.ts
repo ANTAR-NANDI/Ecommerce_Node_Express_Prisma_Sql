@@ -47,6 +47,7 @@ app.use("/uploads/category", express.static(path.resolve("uploads", "categories"
 app.use("/uploads/subcategory", express.static(path.resolve("uploads", "subcategories")));
 app.use("/uploads/brand", express.static(path.resolve("uploads", "brands")));
 app.use("/uploads/supplier", express.static(path.resolve("uploads", "suppliers")));
+app.use("/uploads/customer", express.static(path.resolve("uploads", "customers")));
 app.use("/uploads/employee", express.static(path.resolve("uploads", "employees")));
 app.use("/uploads/product", express.static(path.resolve("uploads", "products")));
 app.use("/uploads", express.static(path.resolve("uploads")));

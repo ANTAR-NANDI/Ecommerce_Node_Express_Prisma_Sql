@@ -73,7 +73,7 @@ Purchase returns use `/purchase-returns`. Create a return from the original `pur
 
 ## Customer requests
 
-Customer data is private, so every `/customers` endpoint requires an admin access token. Standard CRUD is available and `GET /customers?search=phone-or-name` supports customer selection in POS and order screens.
+Customer data is private, so every `/customers` endpoint requires an admin access token. Customer create and update requests use `firstName`, `lastName`, `phone`, `email`, `password`, `gender`, optional `dateOfBirth` (`YYYY-MM-DD`), optional `image`, and optional `isActive`. Passwords are stored securely as hashes and are never returned. Standard CRUD is available and `GET /customers?search=phone-or-name` supports customer selection in POS and order screens.
 
 ## Warehouse requisition and transfer requests
 
