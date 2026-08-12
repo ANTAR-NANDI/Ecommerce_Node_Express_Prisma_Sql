@@ -29,6 +29,10 @@ All management routes use the `/admin` prefix, such as `/admin/categories`, `/ad
 
 `GET /contact-us` is public and returns the configured contact details. The admin panel uses `GET /admin/contact-us` and `POST /admin/contact-us` with `phoneNumber`, `whatsappNumber`, `messengerLink`, `email`, and `address`. Only one Contact Us settings record can be created.
 
+## Blogs
+
+Public blog APIs are `GET /blogs` and `GET /blogs/:id`; they return active blogs and support `?category=News&page=1&limit=12`. Admin CRUD is at `/admin/blogs`. A blog accepts `title`, lowercase `slug`, `category`, `tags` (string array), `description`, optional `image`, and optional `isActive`. Send an `image` File in `multipart/form-data`, or upload first through `POST /admin/uploads/blogs`.
+
 ## API route prefixes
 
 All management routes use the `/admin` prefix, for example `/admin/categories`, `/admin/products`, `/admin/customers`, and `/admin/uploads/products`. Public shop endpoints remain unprefixed: `GET /categories`, `GET /products`, `GET /products/:id`, and product favorite actions at `/products/:id/favorites`.

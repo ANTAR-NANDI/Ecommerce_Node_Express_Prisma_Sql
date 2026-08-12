@@ -12,6 +12,7 @@ const categoriesDirectory = path.resolve("uploads", "categories");
 const subcategoriesDirectory = path.resolve("uploads", "subcategories");
 const brandsDirectory = path.resolve("uploads", "brands");
 const suppliersDirectory = path.resolve("uploads", "suppliers");
+const blogsDirectory = path.resolve("uploads", "blogs");
 const customersDirectory = path.resolve("uploads", "customers");
 const employeesDirectory = path.resolve("uploads", "employees");
 const productsDirectory = path.resolve("uploads", "products");
@@ -74,6 +75,18 @@ export const uploadSupplierImage = multer({
       fs.mkdirSync(suppliersDirectory, { recursive: true });
       callback(null, suppliersDirectory);
     },
+    filename: (_req, file, callback) => callback(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    if (!allowedMimeTypes.has(file.mimetype)) return callback(new HttpError(400, "Only JPEG, PNG, WebP, and GIF images are allowed"));
+    callback(null, true);
+  },
+});
+
+export const uploadBlogImage = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => { fs.mkdirSync(blogsDirectory, { recursive: true }); callback(null, blogsDirectory); },
     filename: (_req, file, callback) => callback(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
   }),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -153,6 +166,11 @@ uploadsRouter.post("/brands", requireAuth, requireAdmin, uploadBrandImage.single
 uploadsRouter.post("/suppliers", requireAuth, requireAdmin, uploadSupplierImage.single("image"), (req, res, next) => {
   if (!req.file) return next(new HttpError(400, "Send an image file in the 'image' field"));
   res.status(201).json({ success: true, data: { filename: req.file.filename, url: publicImageUrl(req, "supplier", req.file.filename) } });
+});
+
+uploadsRouter.post("/blogs", requireAuth, requireAdmin, uploadBlogImage.single("image"), (req, res, next) => {
+  if (!req.file) return next(new HttpError(400, "Send an image file in the 'image' field"));
+  res.status(201).json({ success: true, data: { filename: req.file.filename, url: publicImageUrl(req, "blog", req.file.filename) } });
 });
 
 uploadsRouter.post("/customers", requireAuth, requireAdmin, uploadCustomerImage.single("image"), (req, res, next) => {
