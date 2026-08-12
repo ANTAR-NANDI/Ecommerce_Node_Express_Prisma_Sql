@@ -23,7 +23,7 @@ Browsers can call the API only from origins in `CORS_ORIGIN`. Locally, it defaul
 
 ## API route prefixes
 
-All management routes use the `/admin` prefix, such as `/admin/categories`, `/admin/products`, `/admin/customers`, and `/admin/uploads/products`. Public shop endpoints remain unprefixed: `GET /categories`, `GET /brands`, `GET /products`, `GET /products/:id`, and `/products/:id/favorites`.
+All management routes use the `/admin` prefix, such as `/admin/categories`, `/admin/products`, `/admin/customers`, and `/admin/uploads/products`. Public shop endpoints remain unprefixed: `GET /categories`, `GET /brands`, `GET /products`, `GET /products/:id`, and `/products/:id/favorites`. `POST /products/:id/favorites` toggles the customer's favorite state.
 
 ## API route prefixes
 
@@ -97,7 +97,7 @@ All `/pos-sales` endpoints require an admin access token. Create a completed cou
 
 ## E-commerce orders
 
-`POST /ecommerce-orders` is public and intended for the shop frontend checkout. It accepts the customer's contact and shipping details, creates or updates the customer by phone number, and creates a `pending` order. The request sends only product IDs and quantities: the server reads selling prices from the database, which prevents browser price tampering. It reserves stock immediately from the selected `warehouseId`, so the same stock cannot also be sold through POS. The admin order list is `GET /ecommerce-orders`; filter with `warehouseId`, `customerId`, `status`, `paymentStatus`, `dateFrom`, or `dateTo`. Admins can see one order at `GET /ecommerce-orders/:id` and update operational/payment state at `PATCH /ecommerce-orders/:id/status`. Changing an order to `cancelled` returns its reserved stock.
+`POST /ecommerce-orders` is public and intended for the shop frontend checkout. It accepts the customer's contact and shipping details, creates or updates the customer by phone number, and creates a `pending` order. Each item sends `productId`, `quantity`, and optional `sizeId`. The server reads the product price and applies its discount plus any selected-size extra price, which prevents browser price tampering. It reserves stock immediately from the selected `warehouseId`, so the same stock cannot also be sold through POS. The admin order list is `GET /admin/ecommerce-orders`; filter with `warehouseId`, `customerId`, `status`, `paymentStatus`, `dateFrom`, or `dateTo`. Admins can see one order at `GET /admin/ecommerce-orders/:id` and update operational/payment state at `PATCH /admin/ecommerce-orders/:id/status`. Changing an order to `cancelled` returns its reserved stock.
 
 ## Sales returns
 

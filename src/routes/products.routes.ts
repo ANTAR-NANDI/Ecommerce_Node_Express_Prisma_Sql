@@ -163,7 +163,7 @@ productsRouter.get("/:id", asyncHandler(async (req, res) => {
   res.json({ success: true, data: product });
 }));
 
-// Public shop action. customerId comes from the signed-in customer session in a future customer-auth module.
+// Public shop toggle. customerId comes from the signed-in customer session in a future customer-auth module.
 productsRouter.post("/:id/favorites", asyncHandler(async (req, res) => {
   const productId = id.parse(req.params.id);
   const customerId = z.object({ customerId: id }).parse(req.body).customerId;
@@ -171,8 +171,13 @@ productsRouter.post("/:id/favorites", asyncHandler(async (req, res) => {
   if (!product[0]) throw new HttpError(404, "Active product not found");
   const [customer] = await db.execute<any[]>("SELECT id FROM customers WHERE id = ? AND is_active = TRUE", [customerId]);
   if (!customer[0]) throw new HttpError(404, "Active customer not found");
-  await db.execute("INSERT INTO product_favorites (customer_id, product_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE product_id = VALUES(product_id)", [customerId, productId]);
-  res.status(201).json({ success: true, message: "Product added to favorites" });
+  const [existing] = await db.execute<any[]>("SELECT id FROM product_favorites WHERE customer_id = ? AND product_id = ?", [customerId, productId]);
+  if (existing[0]) {
+    await db.execute("DELETE FROM product_favorites WHERE id = ?", [existing[0].id]);
+    return res.json({ success: true, data: { productId, customerId, isFavorite: false }, message: "Product removed from favorites" });
+  }
+  await db.execute("INSERT INTO product_favorites (customer_id, product_id) VALUES (?, ?)", [customerId, productId]);
+  res.status(201).json({ success: true, data: { productId, customerId, isFavorite: true }, message: "Product added to favorites" });
 }));
 
 productsRouter.delete("/:id/favorites", asyncHandler(async (req, res) => {

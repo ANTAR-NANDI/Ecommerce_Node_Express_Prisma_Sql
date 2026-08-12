@@ -26,7 +26,7 @@ const orderInput = z.object({
   discount: money.optional().default(0),
   note: z.preprocess(value => value === "" ? null : value, z.string().trim().max(1000).nullable().optional()),
   // Prices are intentionally absent: a public frontend must never be trusted to set product prices.
-  items: z.array(z.object({ productId: id, quantity: z.coerce.number().int().positive() })).min(1).max(100),
+  items: z.array(z.object({ productId: id, sizeId: id.nullable().optional(), quantity: z.coerce.number().int().positive() })).min(1).max(100),
 });
 const headerSelect = `SELECT eo.id, eo.order_number AS orderNumber, eo.warehouse_id AS warehouseId,
   w.name AS warehouseName, eo.customer_id AS customerId, c.name AS customerName, c.phone AS customerPhone,
@@ -42,8 +42,9 @@ async function orderDetails(orderId: number, connection: any = db) {
   const [headers] = await connection.execute(`${headerSelect} WHERE eo.id = ?`, [orderId]);
   const order = (headers as any[])[0]; if (!order) return null;
   const [items] = await connection.execute(`SELECT eoi.id, eoi.product_id AS productId, p.name AS productName, p.sku,
+    eoi.size_id AS sizeId, s.name AS sizeName,
     eoi.quantity, eoi.unit_price AS unitPrice, eoi.discount, eoi.line_total AS lineTotal
-    FROM ecommerce_order_items eoi JOIN products p ON p.id = eoi.product_id
+    FROM ecommerce_order_items eoi JOIN products p ON p.id = eoi.product_id LEFT JOIN sizes s ON s.id = eoi.size_id
     WHERE eoi.ecommerce_order_id = ? ORDER BY eoi.id`, [orderId]);
   return { ...order, items };
 }
@@ -56,12 +57,20 @@ ecommerceOrdersRouter.post("/", asyncHandler(async (req, res) => {
     await connection.beginTransaction();
     const [warehouse] = await connection.execute<any[]>("SELECT id FROM warehouses WHERE id = ? AND is_active = 1", [input.warehouseId]);
     if (!warehouse.length) throw new HttpError(400, "Active warehouse not found");
-    const items: Array<{ productId: number; quantity: number; unitPrice: number; discount: number; lineTotal: number }> = [];
+    const items: Array<{ productId: number; sizeId: number | null; quantity: number; unitPrice: number; discount: number; lineTotal: number }> = [];
     for (const requestedItem of input.items) {
-      const [products] = await connection.execute<any[]>("SELECT id, selling_price AS sellingPrice FROM products WHERE id = ? AND is_active = 1", [requestedItem.productId]);
+      const [products] = await connection.execute<any[]>("SELECT id, selling_price AS sellingPrice, discount_type AS discountType, discount FROM products WHERE id = ? AND is_active = 1", [requestedItem.productId]);
       if (!products[0]) throw new HttpError(400, `Active product ID ${requestedItem.productId} was not found`);
-      const unitPrice = Number(products[0].sellingPrice);
-      items.push({ productId: requestedItem.productId, quantity: requestedItem.quantity, unitPrice, discount: 0, lineTotal: Number((requestedItem.quantity * unitPrice).toFixed(2)) });
+      const product = products[0]; const sellingPrice = Number(product.sellingPrice);
+      const basePrice = product.discountType === "percent" ? Math.max(0, sellingPrice - sellingPrice * Number(product.discount) / 100) : product.discountType === "fixed" ? Math.max(0, sellingPrice - Number(product.discount)) : sellingPrice;
+      let extraPrice = 0;
+      if (requestedItem.sizeId) {
+        const [sizes] = await connection.execute<any[]>("SELECT extra_price AS extraPrice FROM product_sizes WHERE product_id = ? AND size_id = ?", [requestedItem.productId, requestedItem.sizeId]);
+        if (!sizes[0]) throw new HttpError(400, `Size ID ${requestedItem.sizeId} is not available for product ID ${requestedItem.productId}`);
+        extraPrice = Number(sizes[0].extraPrice);
+      }
+      const unitPrice = Number((basePrice + extraPrice).toFixed(2));
+      items.push({ productId: requestedItem.productId, sizeId: requestedItem.sizeId ?? null, quantity: requestedItem.quantity, unitPrice, discount: 0, lineTotal: Number((requestedItem.quantity * unitPrice).toFixed(2)) });
     }
     const subtotal = Number(items.reduce((sum, item) => sum + item.lineTotal, 0).toFixed(2));
     if (input.discount > subtotal) throw new HttpError(400, "Order discount cannot exceed the subtotal");
@@ -82,7 +91,7 @@ ecommerceOrdersRouter.post("/", asyncHandler(async (req, res) => {
       if (!stock.affectedRows) throw new HttpError(400, `Insufficient stock in this warehouse for product ID ${item.productId}`);
       const [product] = await connection.execute<any>("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND stock_quantity >= ?", [item.quantity, item.productId, item.quantity]);
       if (!product.affectedRows) throw new HttpError(400, `Product ID ${item.productId} was not found or does not have enough stock`);
-      await connection.execute("INSERT INTO ecommerce_order_items (ecommerce_order_id, product_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.quantity, item.unitPrice, item.discount, item.lineTotal]);
+      await connection.execute("INSERT INTO ecommerce_order_items (ecommerce_order_id, product_id, size_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.sizeId, item.quantity, item.unitPrice, item.discount, item.lineTotal]);
       await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'ecommerce_order', ?, 'ecommerce_order', ?, ?)", [input.warehouseId, item.productId, -item.quantity, result.insertId, "E-commerce order reserved stock"]);
     }
     await connection.commit();
