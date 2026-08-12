@@ -151,7 +151,7 @@ productsRouter.get("/", asyncHandler(async (req, res) => {
     const [rows] = await db.execute<any[]>(`SELECT p.id, p.name, p.slug, p.selling_price AS price, p.discount_type AS discountType, p.discount, c.id AS categoryId, c.name AS categoryName, c.slug AS categorySlug,
       CASE p.discount_type WHEN 'percent' THEN GREATEST(0, p.selling_price - (p.selling_price * p.discount / 100)) WHEN 'fixed' THEN GREATEST(0, p.selling_price - p.discount) ELSE p.selling_price END AS discountedPrice,
       COALESCE((SELECT SUM(psi.quantity) FROM pos_sale_items psi JOIN pos_sales ps ON ps.id = psi.pos_sale_id WHERE psi.product_id = p.id AND ps.status = 'completed'), 0) + COALESCE((SELECT SUM(eoi.quantity) FROM ecommerce_order_items eoi JOIN ecommerce_orders eo ON eo.id = eoi.ecommerce_order_id WHERE eoi.product_id = p.id AND eo.status = 'delivered'), 0) AS totalSold
-      ${joins} ${where} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`, [...values, query.limit, offset]);
+      ${joins} ${where} ORDER BY p.created_at DESC LIMIT ${query.limit} OFFSET ${offset}`, values);
     const ids = rows.map(row => row.id); const imagesByProduct = new Map<number, string[]>();
     if (ids.length) {
       const [images] = await db.execute<any[]>(`SELECT product_id AS productId, filename FROM product_images WHERE product_id IN (${ids.map(() => "?").join(", ")}) ORDER BY product_id, CASE image_type WHEN 'thumbnail' THEN 0 ELSE 1 END, sort_order, id`, ids);
