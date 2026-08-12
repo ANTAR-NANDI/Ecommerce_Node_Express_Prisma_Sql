@@ -65,7 +65,7 @@ Products use `/products` CRUD. Upload files first using `POST /uploads/products`
 
 ## Supplier, warehouse, and purchase requests
 
-Suppliers and warehouses each provide CRUD at `/suppliers` and `/warehouses`. `GET /warehouses/:id/stocks` returns current stock in a selected warehouse. Create a received purchase with `POST /purchases`; it accepts one supplier, one warehouse, and an `items` array of products. It increases the warehouse stock and total product stock in one database transaction. Purchases are audit records: use `PATCH /purchases/:id/cancel` to reverse a received purchase rather than deleting it.
+Suppliers and warehouses each provide CRUD at `/suppliers` and `/warehouses`. Suppliers accept `name`, optional `image`, `phone`, `email`, `address`, and `isActive`; supplier images can be uploaded through `POST /suppliers` as an `image` file or first with `POST /uploads/suppliers`. `GET /warehouses/:id/stocks` returns current stock in a selected warehouse. Create a received purchase with `POST /purchases`; it accepts one supplier, one warehouse, and an `items` array of products. It increases the warehouse stock and total product stock in one database transaction. Purchases are audit records: use `PATCH /purchases/:id/cancel` to reverse a received purchase rather than deleting it.
 
 ## Purchase return requests
 
