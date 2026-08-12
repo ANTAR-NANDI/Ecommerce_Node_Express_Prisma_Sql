@@ -15,6 +15,7 @@ const id = z.coerce.number().int().positive();
 const nullableId = z.preprocess(value => value === "" ? null : value, id.nullable().optional());
 const nullableNumber = z.preprocess(value => value === "" ? null : value, z.coerce.number().nonnegative().nullable().optional());
 const optionalText = z.preprocess(value => value === "" ? null : value, z.string().trim().max(500).nullable().optional());
+const sizeWithExtraPrice = z.object({ sizeId: id, extraPrice: z.coerce.number().nonnegative().default(0) });
 
 const productFields = z.object({
   name: z.string().trim().min(2).max(200),
@@ -26,6 +27,8 @@ const productFields = z.object({
   brandId: nullableId,
   colorIds: z.array(id).max(20).optional(),
   unitId: nullableId,
+  // New size-wise pricing input. sizeIds remains supported with an extraPrice of 0.
+  sizes: z.array(sizeWithExtraPrice).max(20).optional(),
   sizeIds: z.array(id).max(20).optional(),
   sku: z.preprocess(value => value === "" ? null : value, z.string().trim().max(100).nullable().optional()),
   weightKg: nullableNumber,
@@ -57,6 +60,7 @@ function requestInput(req: any) {
   return {
     ...req.body,
     colorIds: arrayField(req.body?.colorIds),
+    sizes: arrayField(req.body?.sizes),
     sizeIds: arrayField(req.body?.sizeIds),
     thumbnailImages: files?.thumbnailImages?.map(file => file.filename) ?? arrayField(req.body?.thumbnailImages),
     additionalImages: files?.additionalImages?.map(file => file.filename) ?? arrayField(req.body?.additionalImages),
@@ -81,12 +85,12 @@ async function productDetails(req: any, productId: number, connection: any = db)
   const product = products[0];
   if (!product) return null;
   const [colors] = await connection.execute("SELECT c.id, c.name, c.code FROM product_colors pc JOIN colors c ON c.id = pc.color_id WHERE pc.product_id = ? ORDER BY c.name", [productId]);
-  const [sizes] = await connection.execute("SELECT s.id, s.name FROM product_sizes ps JOIN sizes s ON s.id = ps.size_id WHERE ps.product_id = ? ORDER BY s.name", [productId]);
+  const [sizes] = await connection.execute("SELECT s.id, s.name, ps.extra_price AS extraPrice FROM product_sizes ps JOIN sizes s ON s.id = ps.size_id WHERE ps.product_id = ? ORDER BY s.name", [productId]);
   const [images] = await connection.execute("SELECT filename, image_type AS imageType FROM product_images WHERE product_id = ? ORDER BY image_type, sort_order, id", [productId]);
   return {
     ...product,
     colors,
-    sizes,
+    sizes: (sizes as any[]).map(size => ({ ...size, extraPrice: Number(size.extraPrice) })),
     thumbnailImages: (images as any[]).filter(image => image.imageType === "thumbnail").map(image => publicImageUrl(req, "product", image.filename)),
     additionalImages: (images as any[]).filter(image => image.imageType === "additional").map(image => publicImageUrl(req, "product", image.filename)),
   };
@@ -98,9 +102,16 @@ async function ensureSubcategoryMatches(connection: any, categoryId: number, sub
   if (!rows[0]) throw new HttpError(400, "The selected subcategory does not belong to the selected category");
 }
 
-async function addRelations(connection: any, productId: number, colorIds: number[], sizeIds: number[], thumbnailImages: string[], additionalImages: string[]) {
+function productSizes(input: { sizes?: { sizeId: number; extraPrice: number }[] | undefined; sizeIds?: number[] | undefined }) {
+  const selected = input.sizes ?? input.sizeIds?.map(sizeId => ({ sizeId, extraPrice: 0 })) ?? [];
+  const unique = new Map<number, { sizeId: number; extraPrice: number }>();
+  for (const size of selected) unique.set(size.sizeId, size);
+  return [...unique.values()];
+}
+
+async function addRelations(connection: any, productId: number, colorIds: number[], sizes: { sizeId: number; extraPrice: number }[], thumbnailImages: string[], additionalImages: string[]) {
   for (const colorId of [...new Set(colorIds)]) await connection.execute("INSERT INTO product_colors (product_id, color_id) VALUES (?, ?)", [productId, colorId]);
-  for (const sizeId of [...new Set(sizeIds)]) await connection.execute("INSERT INTO product_sizes (product_id, size_id) VALUES (?, ?)", [productId, sizeId]);
+  for (const size of sizes) await connection.execute("INSERT INTO product_sizes (product_id, size_id, extra_price) VALUES (?, ?, ?)", [productId, size.sizeId, size.extraPrice]);
   for (const [sortOrder, filename] of thumbnailImages.entries()) await connection.execute("INSERT INTO product_images (product_id, filename, image_type, sort_order) VALUES (?, ?, 'thumbnail', ?)", [productId, filename, sortOrder]);
   for (const [sortOrder, filename] of additionalImages.entries()) await connection.execute("INSERT INTO product_images (product_id, filename, image_type, sort_order) VALUES (?, ?, 'additional', ?)", [productId, filename, sortOrder]);
 }
@@ -148,7 +159,7 @@ productsRouter.post("/", requireAuth, requireAdmin, uploadProductImages.fields([
   try {
     await connection.beginTransaction(); await ensureSubcategoryMatches(connection, input.categoryId, input.subcategoryId);
     const [result] = await connection.execute<any>(`INSERT INTO products (name, slug, short_description, description, category_id, subcategory_id, brand_id, unit_id, sku, weight_kg, buying_price, selling_price, discount_type, discount, stock_quantity, meta_title, meta_description, meta_keywords, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [input.name, input.slug, input.shortDescription, input.description, input.categoryId, input.subcategoryId ?? null, input.brandId ?? null, input.unitId ?? null, input.sku ?? null, input.weightKg ?? null, input.buyingPrice, input.sellingPrice, input.discountType ?? "none", input.discount ?? 0, input.stockQuantity ?? 0, input.metaTitle ?? null, input.metaDescription ?? null, input.metaKeywords ?? null, input.isActive ?? true]);
-    await addRelations(connection, result.insertId, input.colorIds ?? [], input.sizeIds ?? [], input.thumbnailImages, input.additionalImages ?? []);
+    await addRelations(connection, result.insertId, input.colorIds ?? [], productSizes(input), input.thumbnailImages, input.additionalImages ?? []);
     await connection.commit(); const product = await productDetails(req, result.insertId, connection); res.status(201).json({ success: true, data: product });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
@@ -163,7 +174,7 @@ productsRouter.patch("/:id", requireAuth, requireAdmin, uploadProductImages.fiel
     const fields = Object.entries(input).filter(([key]) => columns[key]).map(([key, value]) => ({ column: columns[key]!, value }));
     if (fields.length) await connection.query(`UPDATE products SET ${fields.map(field => `${field.column} = ?`).join(", ")} WHERE id = ?`, [...fields.map(field => field.value), productId] as any);
     if (input.colorIds !== undefined) { await connection.execute("DELETE FROM product_colors WHERE product_id = ?", [productId]); for (const colorId of [...new Set(input.colorIds)]) await connection.execute("INSERT INTO product_colors (product_id, color_id) VALUES (?, ?)", [productId, colorId]); }
-    if (input.sizeIds !== undefined) { await connection.execute("DELETE FROM product_sizes WHERE product_id = ?", [productId]); for (const sizeId of [...new Set(input.sizeIds)]) await connection.execute("INSERT INTO product_sizes (product_id, size_id) VALUES (?, ?)", [productId, sizeId]); }
+    if (input.sizes !== undefined || input.sizeIds !== undefined) { await connection.execute("DELETE FROM product_sizes WHERE product_id = ?", [productId]); await addRelations(connection, productId, [], productSizes(input), [], []); }
     if (input.thumbnailImages !== undefined || input.additionalImages !== undefined) { await connection.execute("DELETE FROM product_images WHERE product_id = ?", [productId]); await addRelations(connection, productId, [], [], input.thumbnailImages ?? current.thumbnailImages.map((url: string) => url.split("/").pop()!), input.additionalImages ?? current.additionalImages.map((url: string) => url.split("/").pop()!)); }
     await connection.commit(); res.json({ success: true, data: await productDetails(req, productId, connection) });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }

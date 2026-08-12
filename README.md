@@ -61,7 +61,7 @@ Each module has standard CRUD at `/colors`, `/sizes`, and `/units`. Reads are pu
 
 ## Product requests
 
-Products use `/products` CRUD. Upload files first using `POST /uploads/products` as `multipart/form-data`, with up to five `thumbnailImages` files and five `additionalImages` files. Use the returned filenames in `thumbnailImages` and `additionalImages` when creating the product. A product can have multiple `colorIds` and `sizeIds`; `categoryId` is required and `subcategoryId` must belong to that category. List filters: `?categoryId=1&subcategoryId=2&brandId=1&colorId=1&sizeId=1`.
+Products use `/products` CRUD. Upload files first using `POST /uploads/products` as `multipart/form-data`, with up to five `thumbnailImages` files and five `additionalImages` files. Use the returned filenames in `thumbnailImages` and `additionalImages` when creating the product. Use `sizes: [{ "sizeId": 1, "extraPrice": 0 }, { "sizeId": 2, "extraPrice": 120 }]` for size-wise extra prices; `sellingPrice` remains the default price. The legacy `sizeIds` input remains supported and assigns an extra price of `0`. `categoryId` is required and `subcategoryId` must belong to that category. List filters: `?categoryId=1&subcategoryId=2&brandId=1&colorId=1&sizeId=1`.
 
 ## Supplier, warehouse, and purchase requests
 
