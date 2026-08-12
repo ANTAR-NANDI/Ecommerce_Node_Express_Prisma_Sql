@@ -36,14 +36,14 @@ POST /categories
 Authorization: Bearer <accessToken>
 Content-Type: application/json
 
-{ "name": "Electronics", "slug": "electronics", "imageUrl": "https://example.com/electronics.jpg", "isActive": true }
+{ "name": "Electronics", "slug": "electronics", "image": "category-image.jpg", "banner": "category-banner.jpg", "order": 0, "description": "Electronic devices and accessories", "isActive": true }
 ```
 
 Subcategories use the same fields plus `categoryId`. `GET /subcategories?categoryId=1` filters by category. Read endpoints are public; create, update, and delete endpoints require an admin token.
 
 ## Category image upload
 
-Create a category with one `multipart/form-data` request: send `POST /categories` with text fields `name`, `slug`, and optional `isActive`, plus an `image` **File** field and an admin access token. The backend saves the file, then stores its generated filename. `POST /uploads/categories` is also available when you want to upload first and later send the returned filename as `image` in category JSON. Uploaded images are served at `/uploads/category/<filename>`.
+Create a category with one `multipart/form-data` request: send `POST /categories` with text fields `name`, `slug`, optional `banner`, `order`, `description`, and `isActive`, plus an `image` **File** field and an admin access token. The backend saves the file, then stores its generated filename. `POST /uploads/categories` is also available when you want to upload first and later send the returned filename as `image` or `banner` in category JSON. Uploaded images are served at `/uploads/category/<filename>`.
 
 Local files are stored in `uploads/categories`. On Railway, attach a persistent Volume at `/app/uploads`, otherwise uploads are removed on the next deployment.
 

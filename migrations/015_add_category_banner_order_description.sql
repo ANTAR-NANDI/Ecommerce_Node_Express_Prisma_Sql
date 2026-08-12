@@ -1,0 +1,4 @@
+ALTER TABLE categories
+  ADD COLUMN banner VARCHAR(500) NULL AFTER image_url,
+  ADD COLUMN `order` INT UNSIGNED NOT NULL DEFAULT 0 AFTER banner,
+  ADD COLUMN description TEXT NULL AFTER `order`;
