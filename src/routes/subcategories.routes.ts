@@ -19,7 +19,6 @@ const categoryIds = z.preprocess(value => {
 }, z.array(id).min(1).max(100));
 
 const baseInput = z.object({
-  categoryId: id.optional(), // Legacy single-category input remains supported.
   categoryIds: categoryIds.optional(),
   name: z.string().trim().min(2).max(100),
   slug: z.string().trim().min(2).max(120).regex(/^[a-z0-9-]+$/),
@@ -27,12 +26,12 @@ const baseInput = z.object({
   description: z.string().trim().max(10_000).nullable().optional(),
   isActive: boolean.optional(),
 });
-const createInput = baseInput.refine(input => input.categoryId || input.categoryIds?.length, { message: "Provide at least one categoryId", path: ["categoryIds"] });
+const createInput = baseInput.refine(input => input.categoryIds?.length, { message: "Provide at least one category ID", path: ["categoryIds"] });
 const updateInput = baseInput.partial();
 const select = "SELECT s.id, s.category_id AS categoryId, s.name, s.slug, s.image_url AS image, s.description, s.is_active AS isActive, s.created_at AS createdAt, s.updated_at AS updatedAt, c.name AS categoryName FROM subcategories s JOIN categories c ON c.id = s.category_id";
 
-function selectedCategoryIds(input: { categoryId?: number | undefined; categoryIds?: number[] | undefined }) {
-  return [...new Set(input.categoryIds ?? (input.categoryId ? [input.categoryId] : []))];
+function selectedCategoryIds(input: { categoryIds?: number[] | undefined }) {
+  return [...new Set(input.categoryIds ?? [])];
 }
 
 async function withCategories(req: Parameters<typeof publicImageUrl>[0], rows: any[], connection: any = db) {
@@ -85,7 +84,7 @@ subcategoriesRouter.patch("/:id", requireAuth, requireAdmin, asyncHandler(async 
   try {
     await connection.beginTransaction();
     const names: Record<string, string> = { image: "image_url", isActive: "is_active", name: "name", slug: "slug", description: "description" };
-    const fields = Object.entries(input).filter(([key]) => names[key]).map(([key, value]) => ({ name: names[key]!, value }));
+    const fields: Array<{ name: string; value: unknown }> = Object.entries(input).filter(([key]) => names[key]).map(([key, value]) => ({ name: names[key]!, value }));
     if (ids.length) fields.push({ name: "category_id", value: ids[0]! });
     if (fields.length) {
       const [result] = await connection.query<any>(`UPDATE subcategories SET ${fields.map(field => `${field.name} = ?`).join(", ")} WHERE id = ?`, [...fields.map(field => field.value), subcategoryId] as any);

@@ -59,7 +59,7 @@ Content-Type: application/json
 { "name": "Electronics", "slug": "electronics", "image": "category-image.jpg", "banner": "category-banner.jpg", "order": 0, "description": "Electronic devices and accessories", "isActive": true }
 ```
 
-Subcategories accept `categoryIds` (an array of one or more category IDs) to associate one subcategory with multiple categories. The legacy `categoryId` is still supported. They also accept optional `description`. `GET /subcategories?categoryId=1` filters by every category assigned to a subcategory. Read endpoints are public; create, update, and delete endpoints require an admin token.
+Subcategories require `categoryIds` (an array of one or more category IDs) to associate one subcategory with multiple categories. They also accept optional `description`. `GET /admin/subcategories?categoryId=1` filters by every category assigned to a subcategory. Read endpoints are public; create, update, and delete endpoints require an admin token.
 
 ## Category image upload
 
@@ -67,7 +67,7 @@ Create a category with one `multipart/form-data` request: send `POST /admin/cate
 
 Local files are stored in `uploads/categories`. On Railway, attach a persistent Volume at `/app/uploads`, otherwise uploads are removed on the next deployment.
 
-Subcategories work the same way: submit `POST /subcategories` as `multipart/form-data` with `categoryId`, `name`, `slug`, optional `isActive`, and an `image` File. Files are saved in `uploads/subcategories`.
+Subcategories work the same way: submit `POST /admin/subcategories` as `multipart/form-data` with `categoryIds` set to a JSON array such as `[1,2]`, `name`, `slug`, optional `description` and `isActive`, and an `image` File. Files are saved in `uploads/subcategories`.
 
 ## Brand requests
 
