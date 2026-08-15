@@ -5,7 +5,7 @@ import path from "node:path";
 import { env } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { requireAdmin, requireAuth } from "./middleware/auth";
-import { authRouter } from "./routes/auth.routes";
+import { authRouter, customerAuthRouter } from "./routes/auth.routes";
 import { brandsRouter } from "./routes/brands.routes";
 import { blogsRouter } from "./routes/blogs.routes";
 import { colorsRouter } from "./routes/colors.routes";
@@ -81,6 +81,7 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/auth", authRouter);
+app.use("/", customerAuthRouter);
 // Public shop endpoints. Management operations are only available below /admin.
 app.use("/categories", publicCategoriesOnly, categoriesRouter);
 app.use("/products", publicProductsOnly, productsRouter);

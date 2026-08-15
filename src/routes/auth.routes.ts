@@ -8,6 +8,7 @@ import { hashToken, makeAccessToken, makeRefreshToken, randomToken, verifyRefres
 import { requireAuth } from "../middleware/auth";
 
 export const authRouter = Router();
+export const customerAuthRouter = Router();
 const credentials = z.object({ email: z.string().email(), password: z.string().min(8).max(72) });
 const customerRegistration = z.object({
   name: z.string().trim().min(2).max(150),
@@ -22,12 +23,13 @@ async function saveRefreshToken(userId: number, token: string) {
   await db.execute("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))", [userId, hashToken(token)]);
 }
 
-authRouter.post("/registration", asyncHandler(async (req, res) => {
+const registration = asyncHandler(async (req, res) => {
   const input = customerRegistration.parse(req.body);
   const parts = input.name.trim().split(/\s+/); const firstName = parts[0]!; const lastName = parts.slice(1).join(" ") || null;
   const [result] = await db.execute<any>("INSERT INTO customers (name, first_name, last_name, phone, email, password_hash, gender, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE)", [input.name, firstName, lastName, input.phone, input.email, await bcrypt.hash(input.password, 12), input.gender]);
   res.status(201).json({ success: true, data: { customerId: result.insertId, name: input.name, email: input.email }, message: "Registration successful. Please log in." });
-}));
+});
+authRouter.post("/registration", registration);
 
 authRouter.post("/admin/login", asyncHandler(async (req, res) => {
   const { email, password } = credentials.parse(req.body);
@@ -67,6 +69,8 @@ const customerLogin = asyncHandler(async (req, res) => {
 });
 authRouter.post("/customer/login", customerLogin);
 authRouter.post("/login", customerLogin);
+customerAuthRouter.post("/registration", registration);
+customerAuthRouter.post("/login", customerLogin);
 
 authRouter.get("/me", requireAuth, asyncHandler(async (req, res) => {
   const [rows] = await db.execute<any[]>("SELECT id, name, email, role, created_at FROM users WHERE id = ?", [req.user!.userId]);
