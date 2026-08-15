@@ -31,7 +31,7 @@ All management routes use the `/admin` prefix, such as `/admin/categories`, `/ad
 
 ## Blogs
 
-Public blog APIs are `GET /blogs` and `GET /blogs/:id`; they return active blogs and support `?category=1&page=1&limit=12`. Admin CRUD is at `/admin/blogs`. A blog accepts `title`, lowercase `slug`, numeric `category` (the category ID), `tags` (string array), `description`, optional `image`, and optional `isActive`. Send an `image` File in `multipart/form-data`, or upload first through `POST /admin/uploads/blogs`.
+Public blog APIs are `GET /blogs` and `GET /blogs/:id`; they return active blogs and support `?categoryId=1&page=1&limit=12`. Admin CRUD is at `/admin/blogs`. A blog accepts `title`, lowercase `slug`, numeric `categoryId`, `tags` (string array), `description`, optional `image`, and optional `isActive`. Blog responses include both `categoryId` and the joined `categoryName`. Send an `image` File in `multipart/form-data`, or upload first through `POST /admin/uploads/blogs`.
 
 ## Promotions
 
