@@ -21,7 +21,7 @@ blogsRouter.get("/", asyncHandler(async (req, res) => {
   const admin = req.baseUrl.startsWith("/admin/"); const query = z.object({ category_id: id.optional(), page: z.coerce.number().int().positive().default(1), limit: z.coerce.number().int().min(1).max(100).default(12) }).parse(req.query);
   const filters: string[] = []; const values: number[] = []; if (!admin) filters.push("b.is_active = TRUE"); if (query.category_id) { filters.push("b.category_id = ?"); values.push(query.category_id); }
   const where = filters.length ? ` WHERE ${filters.join(" AND ")}` : ""; const [counts] = await db.execute<any[]>(`SELECT COUNT(*) AS total FROM blogs b${where}`, values); const total = Number(counts[0].total); const offset = (query.page - 1) * query.limit;
-  const [rows] = await db.execute<any[]>(`${select}${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`, [...values, query.limit, offset]);
+  const [rows] = await db.execute<any[]>(`${select}${where} ORDER BY b.created_at DESC LIMIT ? OFFSET ?`, [...values, query.limit, offset]);
   res.json({ success: true, data: rows.map(blog => format(req, blog)), pagination: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit), hasNextPage: query.page * query.limit < total } });
 }));
 blogsRouter.get("/:id", asyncHandler(async (req, res) => { const admin = req.baseUrl.startsWith("/admin/"); const [rows] = await db.execute<any[]>(`${select} WHERE b.id = ?${admin ? "" : " AND b.is_active = TRUE"}`, [id.parse(req.params.id)]); if (!rows[0]) throw new HttpError(404, "Blog not found"); res.json({ success: true, data: format(req, rows[0]) }); }));
