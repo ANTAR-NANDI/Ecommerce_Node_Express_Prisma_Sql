@@ -9,10 +9,25 @@ import { requireAuth } from "../middleware/auth";
 
 export const authRouter = Router();
 const credentials = z.object({ email: z.string().email(), password: z.string().min(8).max(72) });
+const customerRegistration = z.object({
+  name: z.string().trim().min(2).max(150),
+  email: z.string().trim().email(),
+  password: z.string().min(8).max(72),
+  phone: z.string().trim().min(6).max(30),
+  gender: z.enum(["male", "female", "other"]),
+  agree: z.preprocess(value => value === "1" || value === 1 ? true : value === "0" || value === 0 ? false : value, z.boolean()).refine(value => value, "You must accept the terms and conditions"),
+});
 
 async function saveRefreshToken(userId: number, token: string) {
   await db.execute("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))", [userId, hashToken(token)]);
 }
+
+authRouter.post("/registration", asyncHandler(async (req, res) => {
+  const input = customerRegistration.parse(req.body);
+  const parts = input.name.trim().split(/\s+/); const firstName = parts[0]!; const lastName = parts.slice(1).join(" ") || null;
+  const [result] = await db.execute<any>("INSERT INTO customers (name, first_name, last_name, phone, email, password_hash, gender, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE)", [input.name, firstName, lastName, input.phone, input.email, await bcrypt.hash(input.password, 12), input.gender]);
+  res.status(201).json({ success: true, data: { customerId: result.insertId, name: input.name, email: input.email }, message: "Registration successful. Please log in." });
+}));
 
 authRouter.post("/admin/login", asyncHandler(async (req, res) => {
   const { email, password } = credentials.parse(req.body);
