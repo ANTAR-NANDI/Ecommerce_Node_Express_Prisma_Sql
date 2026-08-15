@@ -20,18 +20,18 @@ const supplierInput = z.object({
   address: nullableText,
   isActive: boolean.optional(),
 });
-const select = "SELECT id, name, image_url AS image, phone, email, address, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt FROM suppliers";
+const select = "SELECT id, name, image AS image, phone, email, address, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt FROM suppliers";
 
 suppliersRouter.get("/", asyncHandler(async (req, res) => { const [rows] = await db.query(`${select} ORDER BY name`); res.json({ success: true, data: (rows as any[]).map(row => withImageUrl(req, row)) }); }));
 suppliersRouter.get("/:id", asyncHandler(async (req, res) => { const [rows] = await db.execute<any[]>(`${select} WHERE id = ?`, [Number(req.params.id)]); if (!rows[0]) throw new HttpError(404, "Supplier not found"); res.json({ success: true, data: withImageUrl(req, rows[0]) }); }));
 suppliersRouter.post("/", requireAuth, requireAdmin, uploadSupplierImage.single("image"), asyncHandler(async (req, res) => {
   const input = supplierInput.parse({ ...req.body, image: req.file?.filename ?? req.body?.image });
-  const [result] = await db.execute<any>("INSERT INTO suppliers (name, image_url, phone, email, address, is_active) VALUES (?, ?, ?, ?, ?, ?)", [input.name, input.image ?? null, input.phone ?? null, input.email ?? null, input.address ?? null, input.isActive ?? true]);
+  const [result] = await db.execute<any>("INSERT INTO suppliers (name, image, phone, email, address, is_active) VALUES (?, ?, ?, ?, ?, ?)", [input.name, input.image ?? null, input.phone ?? null, input.email ?? null, input.address ?? null, input.isActive ?? true]);
   const [rows] = await db.execute<any[]>(`${select} WHERE id = ?`, [result.insertId]); res.status(201).json({ success: true, data: withImageUrl(req, rows[0]) });
 }));
 suppliersRouter.patch("/:id", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   const input = supplierInput.partial().parse(req.body); if (!Object.keys(input).length) throw new HttpError(400, "Provide at least one field to update");
-  const names: Record<string, string> = { name: "name", image: "image_url", phone: "phone", email: "email", address: "address", isActive: "is_active" };
+  const names: Record<string, string> = { name: "name", image: "image", phone: "phone", email: "email", address: "address", isActive: "is_active" };
   const fields = Object.entries(input).map(([key, value]) => ({ name: names[key]!, value }));
   const [result] = await db.query<any>(`UPDATE suppliers SET ${fields.map(field => `${field.name} = ?`).join(", ")} WHERE id = ?`, [...fields.map(field => field.value), Number(req.params.id)] as any);
   if (!result.affectedRows) throw new HttpError(404, "Supplier not found"); res.json({ success: true, message: "Supplier updated" });
