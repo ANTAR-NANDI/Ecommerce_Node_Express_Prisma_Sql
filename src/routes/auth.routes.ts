@@ -40,6 +40,19 @@ authRouter.post("/employee/login", asyncHandler(async (req, res) => {
   res.json({ success: true, data: { user: { id: user.id, employeeId: user.employeeId, name: user.name, email: user.email, role: user.role, employeeRole: user.employeeRole }, accessToken, refreshToken } });
 }));
 
+// Customer accounts are stored in customers rather than the staff users table.
+const customerLogin = asyncHandler(async (req, res) => {
+  const { email, password } = credentials.parse(req.body);
+  const [rows] = await db.execute<any[]>("SELECT id, name, email, password_hash AS passwordHash FROM customers WHERE email = ? AND is_active = TRUE", [email]);
+  const customer = rows[0];
+  if (!customer || !customer.passwordHash || !(await bcrypt.compare(password, customer.passwordHash))) throw new HttpError(401, "Invalid email or password");
+  const payload: JwtPayload = { userId: customer.id, email: customer.email, role: "customer" };
+  // Customer records do not use the staff users/refresh_tokens table.
+  res.json({ success: true, data: { customer: { id: customer.id, name: customer.name, email: customer.email, role: "customer" }, accessToken: makeAccessToken(payload) } });
+});
+authRouter.post("/customer/login", customerLogin);
+authRouter.post("/login", customerLogin);
+
 authRouter.get("/me", requireAuth, asyncHandler(async (req, res) => {
   const [rows] = await db.execute<any[]>("SELECT id, name, email, role, created_at FROM users WHERE id = ?", [req.user!.userId]);
   if (!rows[0]) throw new HttpError(404, "User not found");

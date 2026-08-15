@@ -11,6 +11,7 @@ import { blogsRouter } from "./routes/blogs.routes";
 import { colorsRouter } from "./routes/colors.routes";
 import { contactUsRouter } from "./routes/contact-us.routes";
 import { customersRouter } from "./routes/customers.routes";
+import { customerDashboardRouter } from "./routes/customer-dashboard.routes";
 import { dashboardRouter } from "./routes/dashboard.routes";
 import { employeesRouter } from "./routes/employees.routes";
 import { ecommerceOrdersRouter } from "./routes/ecommerce-orders.routes";
@@ -88,6 +89,8 @@ app.use("/blogs", publicCategoriesOnly, blogsRouter);
 app.use("/", promotionsRouter);
 app.use("/contact-us", publicCategoriesOnly, contactUsRouter);
 app.use("/ecommerce-orders", publicCheckoutOnly, ecommerceOrdersRouter);
+app.use("/customer", customerDashboardRouter);
+app.use("/dashboard", customerDashboardRouter);
 
 // Every management API is protected at the prefix, including operational read routes.
 app.use("/admin", requireAuth, requireAdmin);
