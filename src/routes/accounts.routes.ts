@@ -7,6 +7,7 @@ import { HttpError } from "../lib/http-error";
 export const accountsRouter = Router();
 const id = z.coerce.number().int().positive();
 const childInput = z.object({
+  parentId: id,
   headName: z.string().trim().min(2).max(100),
   isActive: z.preprocess(value => value === "true" ? true : value === "false" ? false : value, z.boolean()).optional(),
 });
@@ -39,9 +40,9 @@ accountsRouter.get("/coa/:id", asyncHandler(async (req, res) => {
   res.json({ success: true, data: rows[0] });
 }));
 
-accountsRouter.post("/coa/:parentId/children", asyncHandler(async (req, res) => {
-  const parentId = id.parse(req.params.parentId);
+accountsRouter.post("/coa", asyncHandler(async (req, res) => {
   const input = childInput.parse(req.body);
+  const parentId = input.parentId;
   const [parents] = await db.execute<any[]>(`${select} WHERE id = ?`, [parentId]);
   const parent = parents[0];
   if (!parent) throw new HttpError(404, "Parent account head not found");
