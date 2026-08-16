@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
+import { postAccountEntries } from "../lib/accounting";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 
 export const posSalesRouter = Router();
@@ -112,6 +113,9 @@ posSalesRouter.post("/", asyncHandler(async (req, res) => {
       await connection.execute("INSERT INTO pos_sale_items (pos_sale_id, product_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.quantity, item.unitPrice, item.discount, item.lineTotal]);
       await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'pos_sale', ?, 'pos_sale', ?, ?)", [input.warehouseId, item.productId, -item.quantity, result.insertId, input.note ?? "POS sale"]);
     }
+    const [costRows] = await connection.execute<any[]>("SELECT COALESCE(SUM(psi.quantity * p.buying_price), 0) AS cost FROM pos_sale_items psi JOIN products p ON p.id = psi.product_id WHERE psi.pos_sale_id = ?", [result.insertId]);
+    const cost = Number(costRows[0].cost);
+    await postAccountEntries(connection, { referenceType: "pos_sale", referenceId: result.insertId, date: saleDate, customerId: input.customerId ?? null, description: `POS sale ${result.insertId}`, lines: [{ headCode: 1000101, debit: totalAmount }, { headCode: 4000101, credit: totalAmount }, { headCode: 5000107, debit: cost }, { headCode: 1000108, credit: cost }] });
     await connection.commit();
     res.status(201).json({ success: true, data: await saleDetails(result.insertId, connection) });
   } catch (error) {

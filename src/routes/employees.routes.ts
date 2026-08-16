@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
+import { createPartyCoa } from "../lib/party-coa";
 import { publicImageUrl } from "../lib/public-image-url";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 import { uploadEmployeeImage } from "./uploads.routes";
@@ -71,6 +72,7 @@ employeesRouter.post("/", uploadEmployeeImage.single("image"), asyncHandler(asyn
     const [user] = await connection.execute<any>("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, 'employee')", [fullName, input.email, await bcrypt.hash(input.password, 12)]);
     const [employee] = await connection.execute<any>(`INSERT INTO employees (user_id, first_name, last_name, phone, gender, image, employee_role, is_active)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [user.insertId, input.firstName, input.lastName ?? null, input.phone, input.gender ?? null, req.file?.filename ?? null, input.role, input.isActive]);
+    await createPartyCoa("employee", employee.insertId, fullName, connection);
     await connection.commit(); res.status(201).json({ success: true, data: await employeeById(employee.insertId, req, connection) });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));

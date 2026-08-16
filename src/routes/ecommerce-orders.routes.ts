@@ -4,6 +4,8 @@ import { z } from "zod";
 import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
+import { postAccountEntries } from "../lib/accounting";
+import { createPartyCoa } from "../lib/party-coa";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 
 export const ecommerceOrdersRouter = Router();
@@ -84,6 +86,7 @@ ecommerceOrdersRouter.post("/", asyncHandler(async (req, res) => {
     } else {
       const [customer] = await connection.execute<any>("INSERT INTO customers (name, phone, email, address, is_active) VALUES (?, ?, ?, ?, TRUE)", [input.customer.name, input.customer.phone, input.customer.email ?? null, input.customer.address]);
       customerId = customer.insertId;
+      await createPartyCoa("customer", customerId, input.customer.name, connection);
     }
     const [result] = await connection.execute<any>(`INSERT INTO ecommerce_orders (order_number, warehouse_id, customer_id, order_date, payment_method, payment_status, shipping_address, note, subtotal, discount, shipping_cost, total_amount, status)
       VALUES (?, ?, ?, NOW(), ?, 'pending', ?, ?, ?, ?, ?, ?, 'pending')`, [orderNumber(), input.warehouseId, customerId, input.paymentMethod, input.customer.address, input.note ?? null, subtotal, input.discount, input.shippingCost, totalAmount]);
@@ -137,13 +140,19 @@ ecommerceOrdersRouter.patch("/:id/status", requireAuth, requireAdmin, asyncHandl
     if (order.status === "cancelled" && input.status && input.status !== "cancelled") throw new HttpError(400, "A cancelled order cannot be reopened; create a new order instead");
     const status = input.status ?? order.status; const paymentStatus = input.paymentStatus ?? order.paymentStatus;
     await connection.execute("UPDATE ecommerce_orders SET status = ?, payment_status = ? WHERE id = ?", [status, paymentStatus, orderId]);
+    const [customerRows] = await connection.execute<any[]>("SELECT name FROM customers WHERE id = ?", [order.customerId]);
+    const customerCoa = await createPartyCoa("customer", order.customerId, customerRows[0].name, connection);
+    if (status === "delivered" && order.status !== "delivered") {
+      const [costRows] = await connection.execute<any[]>("SELECT COALESCE(SUM(eoi.quantity * p.buying_price), 0) AS cost FROM ecommerce_order_items eoi JOIN products p ON p.id = eoi.product_id WHERE eoi.ecommerce_order_id = ?", [orderId]);
+      const cost = Number(costRows[0].cost);
+      await postAccountEntries(connection, { referenceType: "ecommerce_order", referenceId: orderId, customerId: order.customerId, description: `Ecommerce order ${order.orderNumber} delivered`, lines: [{ headCode: Number(customerCoa.HeadCode), debit: Number(order.totalAmount) }, { headCode: 4000101, credit: Number(order.totalAmount) }, { headCode: 5000107, debit: cost }, { headCode: 1000108, credit: cost }] });
+    }
+    if (paymentStatus === "paid" && order.paymentStatus !== "paid") await postAccountEntries(connection, { referenceType: "ecommerce_payment", referenceId: orderId, customerId: order.customerId, description: `Ecommerce order ${order.orderNumber} payment`, lines: [{ headCode: 1000101, debit: Number(order.totalAmount) }, { headCode: Number(customerCoa.HeadCode), credit: Number(order.totalAmount) }] });
     await connection.commit(); res.json({ success: true, data: await orderDetails(orderId, connection) });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
 
 ecommerceOrdersRouter.patch("/:id/payment-status", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   const orderId = id.parse(req.params.id); const { paymentStatus } = z.object({ paymentStatus: paymentStatusInput }).parse(req.body);
-  const [result] = await db.execute<any>("UPDATE ecommerce_orders SET payment_status = ? WHERE id = ?", [paymentStatus, orderId]);
-  if (!result.affectedRows) throw new HttpError(404, "E-commerce order not found");
-  res.json({ success: true, data: await orderDetails(orderId) });
+  const connection = await db.getConnection(); try { await connection.beginTransaction(); const order = await orderDetails(orderId, connection); if (!order) throw new HttpError(404, "E-commerce order not found"); await connection.execute("UPDATE ecommerce_orders SET payment_status = ? WHERE id = ?", [paymentStatus, orderId]); if (paymentStatus === "paid" && order.paymentStatus !== "paid") { const [customers] = await connection.execute<any[]>("SELECT name FROM customers WHERE id = ?", [order.customerId]); const customerCoa = await createPartyCoa("customer", order.customerId, customers[0].name, connection); await postAccountEntries(connection, { referenceType: "ecommerce_payment", referenceId: orderId, customerId: order.customerId, description: `Ecommerce order ${order.orderNumber} payment`, lines: [{ headCode: 1000101, debit: Number(order.totalAmount) }, { headCode: Number(customerCoa.HeadCode), credit: Number(order.totalAmount) }] }); } await connection.commit(); res.json({ success: true, data: await orderDetails(orderId, connection) }); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));

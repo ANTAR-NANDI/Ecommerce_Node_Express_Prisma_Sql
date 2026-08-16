@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
+import { createPartyCoa } from "../lib/party-coa";
 import { publicImageUrl } from "../lib/public-image-url";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 import { uploadCustomerImage } from "./uploads.routes";
@@ -48,6 +49,7 @@ customersRouter.post("/", uploadCustomerImage.single("image"), asyncHandler(asyn
   const passwordHash = await bcrypt.hash(input.password, 12);
   const name = `${input.firstName} ${input.lastName}`;
   const [result] = await db.execute<any>("INSERT INTO customers (name, first_name, last_name, phone, email, password_hash, gender, date_of_birth, image_url, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [name, input.firstName, input.lastName, input.phone, input.email, passwordHash, input.gender, input.dateOfBirth ?? null, input.image ?? null, input.isActive ?? true]);
+  await createPartyCoa("customer", result.insertId, name);
   const [rows] = await db.execute<any[]>(`${select} WHERE id = ?`, [result.insertId]);
   res.status(201).json({ success: true, data: withImageUrl(req, rows[0]) });
 }));

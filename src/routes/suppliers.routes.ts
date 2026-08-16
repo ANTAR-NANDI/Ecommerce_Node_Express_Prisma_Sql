@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
+import { createPartyCoa } from "../lib/party-coa";
 import { publicImageUrl } from "../lib/public-image-url";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 import { uploadSupplierImage } from "./uploads.routes";
@@ -27,6 +28,7 @@ suppliersRouter.get("/:id", asyncHandler(async (req, res) => { const [rows] = aw
 suppliersRouter.post("/", requireAuth, requireAdmin, uploadSupplierImage.single("image"), asyncHandler(async (req, res) => {
   const input = supplierInput.parse({ ...req.body, image: req.file?.filename ?? req.body?.image });
   const [result] = await db.execute<any>("INSERT INTO suppliers (name, image, phone, email, address, is_active) VALUES (?, ?, ?, ?, ?, ?)", [input.name, input.image ?? null, input.phone ?? null, input.email ?? null, input.address ?? null, input.isActive ?? true]);
+  await createPartyCoa("supplier", result.insertId, input.name);
   const [rows] = await db.execute<any[]>(`${select} WHERE id = ?`, [result.insertId]); res.status(201).json({ success: true, data: withImageUrl(req, rows[0]) });
 }));
 suppliersRouter.patch("/:id", requireAuth, requireAdmin, asyncHandler(async (req, res) => {

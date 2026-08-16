@@ -4,6 +4,8 @@ import { z } from "zod";
 import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
+import { postAccountEntries } from "../lib/accounting";
+import { createPartyCoa } from "../lib/party-coa";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 
 export const purchasesRouter = Router();
@@ -78,6 +80,9 @@ purchasesRouter.post("/", requireAuth, requireAdmin, asyncHandler(async (req, re
       await connection.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", [item.quantity, item.productId]);
       await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'purchase', ?, 'purchase', ?, ?)", [input.warehouseId, item.productId, item.quantity, result.insertId, input.invoiceNumber ?? null]);
     }
+    const [supplierRows] = await connection.execute<any[]>("SELECT name FROM suppliers WHERE id = ?", [input.supplierId]);
+    const supplierCoa = await createPartyCoa("supplier", input.supplierId, supplierRows[0].name, connection);
+    await postAccountEntries(connection, { referenceType: "purchase", referenceId: result.insertId, date: purchaseDate, supplierId: input.supplierId, description: `Purchase ${result.insertId}`, lines: [{ headCode: 1000108, debit: totalAmount }, { headCode: Number(supplierCoa.HeadCode), credit: totalAmount }, ...(input.paidAmount ? [{ headCode: Number(supplierCoa.HeadCode), debit: input.paidAmount }, { headCode: 1000101, credit: input.paidAmount }] : [])] });
     await connection.commit(); res.status(201).json({ success: true, data: await purchaseDetails(result.insertId, connection) });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
