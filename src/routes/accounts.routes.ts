@@ -30,7 +30,7 @@ function asTree(rows: any[]) {
 }
 
 accountsRouter.get("/coa", asyncHandler(async (_req, res) => {
-  const [rows] = await db.query<any[]>(`${select} ORDER BY head_code`);
+  const [rows] = await db.query<any[]>(`${select} ORDER BY HeadCode`);
   res.json({ success: true, data: asTree(rows) });
 }));
 
