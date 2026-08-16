@@ -22,6 +22,8 @@ CREATE TABLE account_coa (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- HeadType: A Asset, E Expense, I Income, L Liability, Q Equity. Every visible fixed head from the supplied chart is seeded.
+/* Legacy screenshot seed removed: MySQL cannot INSERT into account_coa while selecting parent IDs from account_coa. The Laravel-pattern seed is in 032_reseed_account_coa_main_levels.sql. */
+/*
 INSERT INTO account_coa (HeadCode,HeadName,PHeadName,parent_id,HeadLevel,HeadType,node_type,allows_manual_children,IsTransaction,IsGL,is_system) VALUES
 (1,'COA',NULL,NULL,0,NULL,'root',TRUE,0,0,1),
 (100,'Assets','COA',(SELECT id FROM account_coa WHERE HeadCode=1),1,'A','group',TRUE,0,0,1),(110,'Current Asset','Assets',(SELECT id FROM account_coa WHERE HeadCode=100),2,'A','group',TRUE,0,0,1),(111,'Accounts Receivable','Current Asset',(SELECT id FROM account_coa WHERE HeadCode=110),3,'A','group',TRUE,0,0,1),(11101,'Customer Receivable','Accounts Receivable',(SELECT id FROM account_coa WHERE HeadCode=111),4,'A','control',0,0,0,1),(11102,'Employee Receivable','Accounts Receivable',(SELECT id FROM account_coa WHERE HeadCode=111),4,'A','control',0,0,0,1),(11103,'spama customer','Accounts Receivable',(SELECT id FROM account_coa WHERE HeadCode=111),4,'A','ledger',0,1,1,1),
@@ -38,3 +40,4 @@ UPDATE account_coa child
 JOIN account_coa parent ON parent.HeadName = child.PHeadName
 SET child.parent_id = parent.id
 WHERE child.PHeadName IS NOT NULL;
+*/
