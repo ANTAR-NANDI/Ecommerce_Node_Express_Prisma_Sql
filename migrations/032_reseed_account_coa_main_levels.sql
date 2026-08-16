@@ -2,6 +2,7 @@
 SET FOREIGN_KEY_CHECKS = 0;
 TRUNCATE TABLE account_coa;
 SET FOREIGN_KEY_CHECKS = 1;
+DROP TABLE IF EXISTS account_coa;
 
 INSERT INTO account_coa (HeadCode,HeadName,PHeadName,HeadLevel,IsActive,IsTransaction,IsGL,IsJournal,HeadType,node_type,allows_manual_children,is_system,CreateBy,CreateDate) VALUES
 (1,'COA',NULL,0,1,0,1,0,NULL,'root',1,1,'Seeding',CURDATE()),
