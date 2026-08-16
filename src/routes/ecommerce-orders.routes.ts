@@ -11,7 +11,8 @@ const id = z.coerce.number().int().positive();
 const money = z.coerce.number().min(0);
 const orderStatuses = ["pending", "confirmed", "processing", "pickup", "on_the_way", "delivered", "cancelled"] as const;
 // "confirm" is accepted from an admin UI, while MySQL stores the clearer value "confirmed".
-const orderStatusInput = z.enum(["pending", "confirm", "confirmed", "processing", "pickup", "on_the_way", "delivered", "cancelled"]).transform(value => value === "confirm" ? "confirmed" : value);
+const orderStatusInput = z.enum(["pending", "confirm", "confirmed", "approve", "processing", "process", "pickup", "on_the_way", "ship", "delivered", "deliver", "cancelled", "cancel"]).transform(value => ({ confirm: "confirmed", approve: "confirmed", process: "processing", ship: "on_the_way", deliver: "delivered", cancel: "cancelled" } as Record<string, string>)[value] ?? value as typeof orderStatuses[number]);
+const paymentStatusInput = z.enum(["pending", "unpaid", "paid", "failed", "refunded"]).transform(value => value === "unpaid" ? "pending" : value);
 const customerInput = z.object({
   name: z.string().trim().min(2).max(150),
   phone: z.string().trim().min(6).max(30),
@@ -121,7 +122,7 @@ ecommerceOrdersRouter.get("/:id", requireAuth, requireAdmin, asyncHandler(async 
 // Update the operational or payment status. Setting status to cancelled restores the reserved stock.
 ecommerceOrdersRouter.patch("/:id/status", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   const orderId = id.parse(req.params.id);
-  const input = z.object({ status: orderStatusInput.optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).optional() }).refine(value => value.status || value.paymentStatus, "Provide status or paymentStatus").parse(req.body);
+  const input = z.object({ status: orderStatusInput.optional(), paymentStatus: paymentStatusInput.optional() }).refine(value => value.status || value.paymentStatus, "Provide status or paymentStatus").parse(req.body);
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction(); const order = await orderDetails(orderId, connection);
@@ -138,4 +139,11 @@ ecommerceOrdersRouter.patch("/:id/status", requireAuth, requireAdmin, asyncHandl
     await connection.execute("UPDATE ecommerce_orders SET status = ?, payment_status = ? WHERE id = ?", [status, paymentStatus, orderId]);
     await connection.commit(); res.json({ success: true, data: await orderDetails(orderId, connection) });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
+
+ecommerceOrdersRouter.patch("/:id/payment-status", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
+  const orderId = id.parse(req.params.id); const { paymentStatus } = z.object({ paymentStatus: paymentStatusInput }).parse(req.body);
+  const [result] = await db.execute<any>("UPDATE ecommerce_orders SET payment_status = ? WHERE id = ?", [paymentStatus, orderId]);
+  if (!result.affectedRows) throw new HttpError(404, "E-commerce order not found");
+  res.json({ success: true, data: await orderDetails(orderId) });
 }));

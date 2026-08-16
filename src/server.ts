@@ -89,7 +89,7 @@ app.use("/brands", publicBrandsOnly, brandsRouter);
 app.use("/blogs", publicCategoriesOnly, blogsRouter);
 app.use("/", promotionsRouter);
 app.use("/contact-us", publicCategoriesOnly, contactUsRouter);
-app.use("/ecommerce-orders", publicCheckoutOnly, ecommerceOrdersRouter);
+app.use("/orders", publicCheckoutOnly, ecommerceOrdersRouter);
 app.use("/customer", customerDashboardRouter);
 app.use("/dashboard", customerDashboardRouter);
 
@@ -103,7 +103,7 @@ app.use("/admin/contact-us", contactUsRouter);
 app.use("/admin/customers", customersRouter);
 app.use("/admin/dashboard", dashboardRouter);
 app.use("/admin/employees", employeesRouter);
-app.use("/admin/ecommerce-orders", ecommerceOrdersRouter);
+app.use("/admin/orders", ecommerceOrdersRouter);
 app.use("/admin/products", productsRouter);
 app.use("/admin/purchases", purchasesRouter);
 app.use("/admin/purchase-returns", purchaseReturnsRouter);
