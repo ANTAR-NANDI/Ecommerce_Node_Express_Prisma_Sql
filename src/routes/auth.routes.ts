@@ -22,6 +22,12 @@ const customerRegistration = z.object({
 async function saveRefreshToken(userId: number, token: string) {
   await db.execute("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))", [userId, hashToken(token)]);
 }
+async function permissionsForUser(userId: number, allPermissions = false) {
+  const [rows] = allPermissions
+    ? await db.query<any[]>("SELECT permission_key AS permissionKey FROM permissions ORDER BY permission_key")
+    : await db.execute<any[]>("SELECT DISTINCT p.permission_key AS permissionKey FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id JOIN permissions p ON p.id = rp.permission_id WHERE ur.user_id = ? ORDER BY p.permission_key", [userId]);
+  return rows.map(row => row.permissionKey);
+}
 
 const registration = asyncHandler(async (req, res) => {
   const input = customerRegistration.parse(req.body);
@@ -40,7 +46,7 @@ authRouter.post("/admin/login", asyncHandler(async (req, res) => {
   const accessToken = makeAccessToken(payload);
   const refreshToken = makeRefreshToken(payload);
   await saveRefreshToken(user.id, refreshToken);
-  res.json({ success: true, data: { user: { id: user.id, name: user.name, email: user.email, role: user.role }, accessToken, refreshToken } });
+  res.json({ success: true, data: { user: { id: user.id, name: user.name, email: user.email, role: user.role }, permissions: await permissionsForUser(user.id, true), accessToken, refreshToken } });
 }));
 
 // Employees have their own login because they cannot use admin-only APIs.
@@ -54,7 +60,7 @@ authRouter.post("/employee/login", asyncHandler(async (req, res) => {
   const payload: JwtPayload = { userId: user.id, email: user.email, role: "employee" };
   const accessToken = makeAccessToken(payload); const refreshToken = makeRefreshToken(payload);
   await saveRefreshToken(user.id, refreshToken);
-  res.json({ success: true, data: { user: { id: user.id, employeeId: user.employeeId, name: user.name, email: user.email, role: user.role, employeeRole: user.employeeRole }, accessToken, refreshToken } });
+  res.json({ success: true, data: { user: { id: user.id, employeeId: user.employeeId, name: user.name, email: user.email, role: user.role, employeeRole: user.employeeRole }, permissions: await permissionsForUser(user.id), accessToken, refreshToken } });
 }));
 
 // Customer accounts are stored in customers rather than the staff users table.
