@@ -1,3 +1,7 @@
+-- This module has not completed a migration yet. A previous failed Railway run may have
+-- left a partial account_coa table because MySQL auto-commits DDL. Reset that partial table.
+DROP TABLE IF EXISTS account_coa;
+
 CREATE TABLE account_coa (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   HeadCode BIGINT UNSIGNED NOT NULL, HeadName VARCHAR(100) NOT NULL, PHeadName VARCHAR(100) NULL,
