@@ -6,6 +6,7 @@ import { env } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { requireAdmin, requireAuth } from "./middleware/auth";
 import { authRouter, customerAuthRouter } from "./routes/auth.routes";
+import { accountsRouter } from "./routes/accounts.routes";
 import { brandsRouter } from "./routes/brands.routes";
 import { blogsRouter } from "./routes/blogs.routes";
 import { colorsRouter } from "./routes/colors.routes";
@@ -96,6 +97,7 @@ app.use("/dashboard", customerDashboardRouter);
 
 // Every management API is protected at the prefix, including operational read routes.
 app.use("/admin", requireAuth, requireAdmin);
+app.use("/admin/accounts", accountsRouter);
 app.use("/admin/brands", brandsRouter);
 app.use("/admin/blogs", blogsRouter);
 app.use("/admin", promotionsRouter);
