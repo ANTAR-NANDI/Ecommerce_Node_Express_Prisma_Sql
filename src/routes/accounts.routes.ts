@@ -204,6 +204,66 @@ accountsRouter.get("/debit-vouchers/:id", asyncHandler(async (req, res) => {
   const voucherId = id.parse(req.params.id); const [rows] = await db.execute<any[]>(`${debitVoucherSelect} WHERE dv.id = ?`, [voucherId]); if (!rows[0]) throw new HttpError(404, "Debit voucher not found"); const [transactions] = await db.execute<any[]>("SELECT id, transaction_no AS transaction_number, transaction_date AS date, head_code, debit, credit, description FROM account_transactions WHERE reference_type = 'debit_voucher' AND reference_id = ? ORDER BY id", [voucherId]); res.json({ success: true, data: { ...rows[0], transactions } });
 }));
 
+const creditVoucherSelect = `SELECT cv.id, cv.voucher_number AS voucher_number, cv.voucher_date AS date,
+  cv.account_id, credit.HeadCode AS account_head_code, credit.HeadName AS account_name,
+  cv.reverse_account_id, reverseAccount.HeadCode AS reverse_account_head_code, reverseAccount.HeadName AS reverse_account_name,
+  cv.ledger_comment, cv.sub_type, cv.amount, cv.created_at
+  FROM credit_vouchers cv
+  JOIN account_coa credit ON credit.id = cv.account_id
+  JOIN account_coa reverseAccount ON reverseAccount.id = cv.reverse_account_id`;
+
+accountsRouter.post("/credit-vouchers", asyncHandler(async (req, res) => {
+  const input = debitVoucherInput.parse(req.body); const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction(); const [accounts] = await connection.execute<any[]>("SELECT id, HeadCode FROM account_coa WHERE id IN (?, ?) AND IsActive = TRUE", [input.account_id, input.reverse_account_id]); if (accounts.length !== 2) throw new HttpError(400, "Both voucher accounts must be active");
+    const creditAccount = accounts.find(account => Number(account.id) === input.account_id)!; const reverseAccount = accounts.find(account => Number(account.id) === input.reverse_account_id)!; const voucherNumber = `CV-${input.date.replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    const [voucher] = await connection.execute<any>("INSERT INTO credit_vouchers (voucher_number, voucher_date, account_id, reverse_account_id, ledger_comment, sub_type, amount) VALUES (?, ?, ?, ?, ?, ?, ?)", [voucherNumber, input.date, input.account_id, input.reverse_account_id, input.ledger_comment, input.sub_type ?? null, input.amount]);
+    await postAccountEntries(connection, { referenceType: "credit_voucher", referenceId: voucher.insertId, date: input.date, description: `Credit voucher ${voucherNumber}: ${input.ledger_comment}`, lines: [{ headCode: Number(reverseAccount.HeadCode), debit: input.amount }, { headCode: Number(creditAccount.HeadCode), credit: input.amount }] });
+    const [rows] = await connection.execute<any[]>(`${creditVoucherSelect} WHERE cv.id = ?`, [voucher.insertId]); await connection.commit(); res.status(201).json({ success: true, data: rows[0] });
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
+
+accountsRouter.get("/credit-vouchers", asyncHandler(async (req, res) => {
+  const query = z.object({ search: z.string().trim().max(100).optional(), date_from: z.string().date().optional(), date_to: z.string().date().optional() }).parse(req.query); const filters: string[] = []; const values: string[] = [];
+  if (query.search) { filters.push("(cv.voucher_number LIKE ? OR credit.HeadName LIKE ? OR reverseAccount.HeadName LIKE ? OR cv.ledger_comment LIKE ?)"); values.push(...Array(4).fill(`%${query.search}%`)); }
+  if (query.date_from) { filters.push("cv.voucher_date >= ?"); values.push(query.date_from); } if (query.date_to) { filters.push("cv.voucher_date <= ?"); values.push(query.date_to); }
+  const [rows] = await db.execute<any[]>(`${creditVoucherSelect}${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""} ORDER BY cv.voucher_date DESC, cv.id DESC`, values); res.json({ success: true, data: rows });
+}));
+
+accountsRouter.get("/credit-vouchers/:id", asyncHandler(async (req, res) => {
+  const voucherId = id.parse(req.params.id); const [rows] = await db.execute<any[]>(`${creditVoucherSelect} WHERE cv.id = ?`, [voucherId]); if (!rows[0]) throw new HttpError(404, "Credit voucher not found"); const [transactions] = await db.execute<any[]>("SELECT id, transaction_no AS transaction_number, transaction_date AS date, head_code, debit, credit, description FROM account_transactions WHERE reference_type = 'credit_voucher' AND reference_id = ? ORDER BY id", [voucherId]); res.json({ success: true, data: { ...rows[0], transactions } });
+}));
+
+const contraVoucherSelect = `SELECT cv.id, cv.voucher_number AS voucher_number, cv.voucher_date AS date,
+  cv.account_id, debit.HeadCode AS account_head_code, debit.HeadName AS account_name,
+  cv.reverse_account_id, reverseAccount.HeadCode AS reverse_account_head_code, reverseAccount.HeadName AS reverse_account_name,
+  cv.ledger_comment, cv.sub_type, cv.amount, cv.created_at
+  FROM contra_vouchers cv
+  JOIN account_coa debit ON debit.id = cv.account_id
+  JOIN account_coa reverseAccount ON reverseAccount.id = cv.reverse_account_id`;
+
+accountsRouter.post("/contra-vouchers", asyncHandler(async (req, res) => {
+  const input = debitVoucherInput.parse(req.body); const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction(); const [accounts] = await connection.execute<any[]>("SELECT id, HeadCode, bank_id AS bankId FROM account_coa WHERE id IN (?, ?) AND IsActive = TRUE", [input.account_id, input.reverse_account_id]); if (accounts.length !== 2) throw new HttpError(400, "Both voucher accounts must be active");
+    const debitAccount = accounts.find(account => Number(account.id) === input.account_id)!; const reverseAccount = accounts.find(account => Number(account.id) === input.reverse_account_id)!; const isCashOrBank = (account: any) => [1000101, 1000103, 1000104].includes(Number(account.HeadCode)) || Boolean(account.bankId); if (!isCashOrBank(debitAccount) || !isCashOrBank(reverseAccount)) throw new HttpError(400, "Contra vouchers can only transfer between cash, mobile-wallet, or bank accounts");
+    const voucherNumber = `CT-${input.date.replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`; const [voucher] = await connection.execute<any>("INSERT INTO contra_vouchers (voucher_number, voucher_date, account_id, reverse_account_id, ledger_comment, sub_type, amount) VALUES (?, ?, ?, ?, ?, ?, ?)", [voucherNumber, input.date, input.account_id, input.reverse_account_id, input.ledger_comment, input.sub_type ?? null, input.amount]);
+    await postAccountEntries(connection, { referenceType: "contra_voucher", referenceId: voucher.insertId, date: input.date, description: `Contra voucher ${voucherNumber}: ${input.ledger_comment}`, lines: [{ headCode: Number(debitAccount.HeadCode), debit: input.amount }, { headCode: Number(reverseAccount.HeadCode), credit: input.amount }] });
+    const [rows] = await connection.execute<any[]>(`${contraVoucherSelect} WHERE cv.id = ?`, [voucher.insertId]); await connection.commit(); res.status(201).json({ success: true, data: rows[0] });
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
+
+accountsRouter.get("/contra-vouchers", asyncHandler(async (req, res) => {
+  const query = z.object({ search: z.string().trim().max(100).optional(), date_from: z.string().date().optional(), date_to: z.string().date().optional() }).parse(req.query); const filters: string[] = []; const values: string[] = [];
+  if (query.search) { filters.push("(cv.voucher_number LIKE ? OR debit.HeadName LIKE ? OR reverseAccount.HeadName LIKE ? OR cv.ledger_comment LIKE ?)"); values.push(...Array(4).fill(`%${query.search}%`)); }
+  if (query.date_from) { filters.push("cv.voucher_date >= ?"); values.push(query.date_from); } if (query.date_to) { filters.push("cv.voucher_date <= ?"); values.push(query.date_to); }
+  const [rows] = await db.execute<any[]>(`${contraVoucherSelect}${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""} ORDER BY cv.voucher_date DESC, cv.id DESC`, values); res.json({ success: true, data: rows });
+}));
+
+accountsRouter.get("/contra-vouchers/:id", asyncHandler(async (req, res) => {
+  const voucherId = id.parse(req.params.id); const [rows] = await db.execute<any[]>(`${contraVoucherSelect} WHERE cv.id = ?`, [voucherId]); if (!rows[0]) throw new HttpError(404, "Contra voucher not found"); const [transactions] = await db.execute<any[]>("SELECT id, transaction_no AS transaction_number, transaction_date AS date, head_code, debit, credit, description FROM account_transactions WHERE reference_type = 'contra_voucher' AND reference_id = ? ORDER BY id", [voucherId]); res.json({ success: true, data: { ...rows[0], transactions } });
+}));
+
 accountsRouter.post("/salary-payments", asyncHandler(async (req, res) => {
   const { employeeId, ...input } = paymentInput.extend({ employeeId: id }).parse(req.body); const connection = await db.getConnection();
   try { await connection.beginTransaction(); const [employees] = await connection.execute<any[]>("SELECT first_name AS firstName, last_name AS lastName FROM employees WHERE id = ?", [employeeId]); if (!employees[0]) throw new HttpError(404, "Employee not found"); const fullName = [employees[0].firstName, employees[0].lastName].filter(Boolean).join(" "); const [payment] = await connection.execute<any>("INSERT INTO employee_salary_payments (payment_number, employee_id, payment_date, amount, payment_method, note) VALUES (?, ?, COALESCE(?, NOW()), ?, ?, ?)", [paymentNo("SALPAY"), employeeId, input.paymentDate ?? null, input.amount, input.paymentMethod, input.note ?? null]); const coa = await createPartyCoa("employee", employeeId, fullName, connection); await postAccountEntries(connection, { referenceType: "salary_payment", referenceId: payment.insertId, date: input.paymentDate, employeeId, description: `Salary payment ${payment.insertId}`, lines: [{ headCode: 5000203, debit: input.amount }, { headCode: Number(coa.HeadCode), credit: input.amount }, { headCode: Number(coa.HeadCode), debit: input.amount }, { headCode: 1000101, credit: input.amount }] }); await connection.commit(); res.status(201).json({ success: true, data: { id: payment.insertId } }); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
