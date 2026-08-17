@@ -111,6 +111,12 @@ const journalVoucherInput = z.object({
 }).superRefine((input, ctx) => {
   const debit = input.entries.reduce((sum, entry) => sum + Number(entry.debit ?? 0), 0); const credit = input.entries.reduce((sum, entry) => sum + Number(entry.credit ?? 0), 0); if (Math.abs(debit - credit) > 0.001) ctx.addIssue({ code: "custom", path: ["entries"], message: "Journal voucher debit and credit totals must match" });
 });
+const cashAdjustmentInput = z.object({
+  date: z.string().date(),
+  adjustment_type: z.enum(["debit", "credit"]),
+  remarks: z.string().trim().min(1).max(1000),
+  amount: z.coerce.number().positive(),
+});
 const paymentMethodName: Record<number, "cash" | "bank_transfer" | "cheque"> = { 1: "cash", 2: "bank_transfer", 3: "cheque" };
 const paymentNo = (prefix: string) => `${prefix}-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 const bankInput = z.object({ name: z.string().trim().min(2).max(150), accountName: z.string().trim().min(2).max(150), accountNumber: z.string().trim().min(2).max(100), branch: z.string().trim().max(150).nullable().optional(), routingNumber: z.string().trim().max(100).nullable().optional(), isActive: z.boolean().optional() });
@@ -303,6 +309,33 @@ accountsRouter.get("/journal-vouchers", asyncHandler(async (req, res) => {
 
 accountsRouter.get("/journal-vouchers/:id", asyncHandler(async (req, res) => {
   const voucherId = id.parse(req.params.id); const [rows] = await db.execute<any[]>(`${journalVoucherSelect} WHERE jv.id = ?`, [voucherId]); if (!rows[0]) throw new HttpError(404, "Journal voucher not found"); const [entries] = await db.execute<any[]>("SELECT jve.id, jve.account_id, coa.HeadCode AS account_head_code, coa.HeadName AS account_name, jve.debit, jve.credit FROM journal_voucher_entries jve JOIN account_coa coa ON coa.id = jve.account_id WHERE jve.journal_voucher_id = ? ORDER BY jve.id", [voucherId]); const [transactions] = await db.execute<any[]>("SELECT id, transaction_no AS transaction_number, transaction_date AS date, head_code, debit, credit, description FROM account_transactions WHERE reference_type = 'journal_voucher' AND reference_id = ? ORDER BY id", [voucherId]); res.json({ success: true, data: { ...rows[0], entries, transactions } });
+}));
+
+const cashAdjustmentSelect = `SELECT ca.id, ca.voucher_number AS voucher_number, ca.adjustment_date AS date, ca.adjustment_type, ca.remarks, ca.amount, ca.created_at,
+  cash.HeadCode AS cash_head_code, cash.HeadName AS cash_account_name,
+  offsetAccount.HeadCode AS offset_head_code, offsetAccount.HeadName AS offset_account_name
+  FROM cash_adjustments ca
+  JOIN account_coa cash ON cash.id = ca.cash_account_id
+  JOIN account_coa offsetAccount ON offsetAccount.id = ca.offset_account_id`;
+
+accountsRouter.post("/cash-adjustments", asyncHandler(async (req, res) => {
+  const input = cashAdjustmentInput.parse(req.body); const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction(); const [cashRows] = await connection.execute<any[]>("SELECT id, HeadCode FROM account_coa WHERE HeadCode = 1000101 AND IsActive = TRUE", []); const cash = cashRows[0]; if (!cash) throw new HttpError(400, "Cash in Hand account is missing or inactive"); const offsetCode = input.adjustment_type === "debit" ? 40002 : 5000205; const [offsetRows] = await connection.execute<any[]>("SELECT id, HeadCode FROM account_coa WHERE HeadCode = ? AND IsActive = TRUE", [offsetCode]); const offset = offsetRows[0]; if (!offset) throw new HttpError(400, "Cash adjustment offset account is missing or inactive");
+    const voucherNumber = `CHV-${input.date.replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`; const [adjustment] = await connection.execute<any>("INSERT INTO cash_adjustments (voucher_number, adjustment_date, adjustment_type, cash_account_id, offset_account_id, remarks, amount) VALUES (?, ?, ?, ?, ?, ?, ?)", [voucherNumber, input.date, input.adjustment_type, cash.id, offset.id, input.remarks, input.amount]);
+    const lines = input.adjustment_type === "debit" ? [{ headCode: Number(cash.HeadCode), debit: input.amount }, { headCode: Number(offset.HeadCode), credit: input.amount }] : [{ headCode: Number(offset.HeadCode), debit: input.amount }, { headCode: Number(cash.HeadCode), credit: input.amount }]; await postAccountEntries(connection, { referenceType: "cash_adjustment", referenceId: adjustment.insertId, date: input.date, description: `Cash adjustment ${voucherNumber}: ${input.remarks}`, lines });
+    const [rows] = await connection.execute<any[]>(`${cashAdjustmentSelect} WHERE ca.id = ?`, [adjustment.insertId]); await connection.commit(); res.status(201).json({ success: true, data: rows[0] });
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
+
+accountsRouter.get("/cash-adjustments", asyncHandler(async (req, res) => {
+  const query = z.object({ search: z.string().trim().max(100).optional(), adjustment_type: z.enum(["debit", "credit"]).optional(), date_from: z.string().date().optional(), date_to: z.string().date().optional() }).parse(req.query); const filters: string[] = []; const values: string[] = [];
+  if (query.search) { filters.push("(ca.voucher_number LIKE ? OR ca.remarks LIKE ?)"); values.push(...Array(2).fill(`%${query.search}%`)); } if (query.adjustment_type) { filters.push("ca.adjustment_type = ?"); values.push(query.adjustment_type); } if (query.date_from) { filters.push("ca.adjustment_date >= ?"); values.push(query.date_from); } if (query.date_to) { filters.push("ca.adjustment_date <= ?"); values.push(query.date_to); }
+  const [rows] = await db.execute<any[]>(`${cashAdjustmentSelect}${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""} ORDER BY ca.adjustment_date DESC, ca.id DESC`, values); res.json({ success: true, data: rows });
+}));
+
+accountsRouter.get("/cash-adjustments/:id", asyncHandler(async (req, res) => {
+  const adjustmentId = id.parse(req.params.id); const [rows] = await db.execute<any[]>(`${cashAdjustmentSelect} WHERE ca.id = ?`, [adjustmentId]); if (!rows[0]) throw new HttpError(404, "Cash adjustment not found"); const [transactions] = await db.execute<any[]>("SELECT id, transaction_no AS transaction_number, transaction_date AS date, head_code, debit, credit, description FROM account_transactions WHERE reference_type = 'cash_adjustment' AND reference_id = ? ORDER BY id", [adjustmentId]); res.json({ success: true, data: { ...rows[0], transactions } });
 }));
 
 accountsRouter.post("/salary-payments", asyncHandler(async (req, res) => {
