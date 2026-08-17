@@ -91,6 +91,16 @@ const customerPaymentInput = z.object({
   if (input.payment_method_id === 3 && !input.cheque_number) ctx.addIssue({ code: "custom", path: ["cheque_number"], message: "cheque_number is required for cheque payments" });
   if (input.payment_method_id !== 3 && input.cheque_number) ctx.addIssue({ code: "custom", path: ["cheque_number"], message: "cheque_number is only allowed for cheque payments" });
 });
+const debitVoucherInput = z.object({
+  date: z.string().date(),
+  account_id: id,
+  reverse_account_id: id,
+  amount: z.coerce.number().positive(),
+  ledger_comment: z.string().trim().min(1).max(1000),
+  sub_type: z.preprocess(value => value === "" ? null : value, z.string().trim().max(100).nullable().optional()),
+}).superRefine((input, ctx) => {
+  if (input.account_id === input.reverse_account_id) ctx.addIssue({ code: "custom", path: ["reverse_account_id"], message: "Reverse account must be different from the debit account" });
+});
 const paymentMethodName: Record<number, "cash" | "bank_transfer" | "cheque"> = { 1: "cash", 2: "bank_transfer", 3: "cheque" };
 const paymentNo = (prefix: string) => `${prefix}-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 const bankInput = z.object({ name: z.string().trim().min(2).max(150), accountName: z.string().trim().min(2).max(150), accountNumber: z.string().trim().min(2).max(100), branch: z.string().trim().max(150).nullable().optional(), routingNumber: z.string().trim().max(100).nullable().optional(), isActive: z.boolean().optional() });
@@ -162,6 +172,36 @@ accountsRouter.post("/customer-payments/cheques/:chequeId/pass", asyncHandler(as
 accountsRouter.post("/customer-payments/cheques/:chequeId/withdraw", asyncHandler(async (req, res) => {
   const chequeId = id.parse(req.params.chequeId); const remarks = z.object({ remarks: z.string().trim().max(1000).optional() }).parse(req.body).remarks; const connection = await db.getConnection();
   try { await connection.beginTransaction(); const [payments] = await connection.execute<any[]>("SELECT cheque_id AS chequeId FROM customer_payments WHERE cheque_id = ? FOR UPDATE", [chequeId]); if (!payments[0]) throw new HttpError(404, "Customer cheque not found"); const [statuses] = await connection.execute<any[]>("SELECT status FROM cheque_statuses WHERE cheque_id = ? ORDER BY id DESC LIMIT 1", [chequeId]); if (statuses[0]?.status !== "pending") throw new HttpError(400, "Only pending cheques can be withdrawn"); await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date, remarks) VALUES (?, 'withdrawn', CURDATE(), ?)", [chequeId, remarks ?? null]); await connection.commit(); res.json({ success: true, data: { cheque_id: chequeId, status: "withdrawn" } }); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
+
+const debitVoucherSelect = `SELECT dv.id, dv.voucher_number AS voucher_number, dv.voucher_date AS date,
+  dv.account_id, debit.HeadCode AS account_head_code, debit.HeadName AS account_name,
+  dv.reverse_account_id, reverseAccount.HeadCode AS reverse_account_head_code, reverseAccount.HeadName AS reverse_account_name,
+  dv.ledger_comment, dv.sub_type, dv.amount, dv.created_at
+  FROM debit_vouchers dv
+  JOIN account_coa debit ON debit.id = dv.account_id
+  JOIN account_coa reverseAccount ON reverseAccount.id = dv.reverse_account_id`;
+
+accountsRouter.post("/debit-vouchers", asyncHandler(async (req, res) => {
+  const input = debitVoucherInput.parse(req.body); const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction(); const [accounts] = await connection.execute<any[]>("SELECT id, HeadCode FROM account_coa WHERE id IN (?, ?) AND IsActive = TRUE", [input.account_id, input.reverse_account_id]); if (accounts.length !== 2) throw new HttpError(400, "Both voucher accounts must be active");
+    const debitAccount = accounts.find(account => Number(account.id) === input.account_id)!; const reverseAccount = accounts.find(account => Number(account.id) === input.reverse_account_id)!; const voucherNumber = `DV-${input.date.replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    const [voucher] = await connection.execute<any>("INSERT INTO debit_vouchers (voucher_number, voucher_date, account_id, reverse_account_id, ledger_comment, sub_type, amount) VALUES (?, ?, ?, ?, ?, ?, ?)", [voucherNumber, input.date, input.account_id, input.reverse_account_id, input.ledger_comment, input.sub_type ?? null, input.amount]);
+    await postAccountEntries(connection, { referenceType: "debit_voucher", referenceId: voucher.insertId, date: input.date, description: `Debit voucher ${voucherNumber}: ${input.ledger_comment}`, lines: [{ headCode: Number(debitAccount.HeadCode), debit: input.amount }, { headCode: Number(reverseAccount.HeadCode), credit: input.amount }] });
+    const [rows] = await connection.execute<any[]>(`${debitVoucherSelect} WHERE dv.id = ?`, [voucher.insertId]); await connection.commit(); res.status(201).json({ success: true, data: rows[0] });
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
+
+accountsRouter.get("/debit-vouchers", asyncHandler(async (req, res) => {
+  const query = z.object({ search: z.string().trim().max(100).optional(), date_from: z.string().date().optional(), date_to: z.string().date().optional() }).parse(req.query); const filters: string[] = []; const values: string[] = [];
+  if (query.search) { filters.push("(dv.voucher_number LIKE ? OR debit.HeadName LIKE ? OR reverseAccount.HeadName LIKE ? OR dv.ledger_comment LIKE ?)"); values.push(...Array(4).fill(`%${query.search}%`)); }
+  if (query.date_from) { filters.push("dv.voucher_date >= ?"); values.push(query.date_from); } if (query.date_to) { filters.push("dv.voucher_date <= ?"); values.push(query.date_to); }
+  const [rows] = await db.execute<any[]>(`${debitVoucherSelect}${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""} ORDER BY dv.voucher_date DESC, dv.id DESC`, values); res.json({ success: true, data: rows });
+}));
+
+accountsRouter.get("/debit-vouchers/:id", asyncHandler(async (req, res) => {
+  const voucherId = id.parse(req.params.id); const [rows] = await db.execute<any[]>(`${debitVoucherSelect} WHERE dv.id = ?`, [voucherId]); if (!rows[0]) throw new HttpError(404, "Debit voucher not found"); const [transactions] = await db.execute<any[]>("SELECT id, transaction_no AS transaction_number, transaction_date AS date, head_code, debit, credit, description FROM account_transactions WHERE reference_type = 'debit_voucher' AND reference_id = ? ORDER BY id", [voucherId]); res.json({ success: true, data: { ...rows[0], transactions } });
 }));
 
 accountsRouter.post("/salary-payments", asyncHandler(async (req, res) => {
