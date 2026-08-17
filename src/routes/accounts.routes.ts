@@ -101,6 +101,16 @@ const debitVoucherInput = z.object({
 }).superRefine((input, ctx) => {
   if (input.account_id === input.reverse_account_id) ctx.addIssue({ code: "custom", path: ["reverse_account_id"], message: "Reverse account must be different from the debit account" });
 });
+const journalVoucherInput = z.object({
+  date: z.string().date(),
+  ledger_comment: z.string().trim().min(1).max(1000),
+  sub_type: z.preprocess(value => value === "" ? null : value, z.string().trim().max(100).nullable().optional()),
+  entries: z.array(z.object({ account_id: id, debit: z.coerce.number().nonnegative().optional(), credit: z.coerce.number().nonnegative().optional() }).superRefine((entry, ctx) => {
+    const debit = Number(entry.debit ?? 0); const credit = Number(entry.credit ?? 0); if ((debit <= 0 && credit <= 0) || (debit > 0 && credit > 0)) ctx.addIssue({ code: "custom", message: "Each entry must contain either a debit or a credit amount" });
+  })).min(2).max(100),
+}).superRefine((input, ctx) => {
+  const debit = input.entries.reduce((sum, entry) => sum + Number(entry.debit ?? 0), 0); const credit = input.entries.reduce((sum, entry) => sum + Number(entry.credit ?? 0), 0); if (Math.abs(debit - credit) > 0.001) ctx.addIssue({ code: "custom", path: ["entries"], message: "Journal voucher debit and credit totals must match" });
+});
 const paymentMethodName: Record<number, "cash" | "bank_transfer" | "cheque"> = { 1: "cash", 2: "bank_transfer", 3: "cheque" };
 const paymentNo = (prefix: string) => `${prefix}-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 const bankInput = z.object({ name: z.string().trim().min(2).max(150), accountName: z.string().trim().min(2).max(150), accountNumber: z.string().trim().min(2).max(100), branch: z.string().trim().max(150).nullable().optional(), routingNumber: z.string().trim().max(100).nullable().optional(), isActive: z.boolean().optional() });
@@ -262,6 +272,37 @@ accountsRouter.get("/contra-vouchers", asyncHandler(async (req, res) => {
 
 accountsRouter.get("/contra-vouchers/:id", asyncHandler(async (req, res) => {
   const voucherId = id.parse(req.params.id); const [rows] = await db.execute<any[]>(`${contraVoucherSelect} WHERE cv.id = ?`, [voucherId]); if (!rows[0]) throw new HttpError(404, "Contra voucher not found"); const [transactions] = await db.execute<any[]>("SELECT id, transaction_no AS transaction_number, transaction_date AS date, head_code, debit, credit, description FROM account_transactions WHERE reference_type = 'contra_voucher' AND reference_id = ? ORDER BY id", [voucherId]); res.json({ success: true, data: { ...rows[0], transactions } });
+}));
+
+const journalVoucherSelect = `SELECT jv.id, jv.voucher_number AS voucher_number, jv.voucher_date AS date, jv.ledger_comment, jv.sub_type, jv.total_amount, jv.created_at,
+  debit.HeadName AS account_name, credit.HeadName AS reverse_account_name
+  FROM journal_vouchers jv
+  LEFT JOIN journal_voucher_entries firstDebit ON firstDebit.id = (SELECT id FROM journal_voucher_entries WHERE journal_voucher_id = jv.id AND debit > 0 ORDER BY id LIMIT 1)
+  LEFT JOIN account_coa debit ON debit.id = firstDebit.account_id
+  LEFT JOIN journal_voucher_entries firstCredit ON firstCredit.id = (SELECT id FROM journal_voucher_entries WHERE journal_voucher_id = jv.id AND credit > 0 ORDER BY id LIMIT 1)
+  LEFT JOIN account_coa credit ON credit.id = firstCredit.account_id`;
+
+accountsRouter.post("/journal-vouchers", asyncHandler(async (req, res) => {
+  const input = journalVoucherInput.parse(req.body); const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction(); const accountIds = [...new Set(input.entries.map(entry => entry.account_id))]; const placeholders = accountIds.map(() => "?").join(", "); const [accounts] = await connection.execute<any[]>(`SELECT id, HeadCode FROM account_coa WHERE id IN (${placeholders}) AND IsActive = TRUE`, accountIds); if (accounts.length !== accountIds.length) throw new HttpError(400, "Every journal account must be active");
+    const byId = new Map(accounts.map(account => [Number(account.id), Number(account.HeadCode)])); const total = input.entries.reduce((sum, entry) => sum + Number(entry.debit ?? 0), 0); const voucherNumber = `JV-${input.date.replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    const [voucher] = await connection.execute<any>("INSERT INTO journal_vouchers (voucher_number, voucher_date, ledger_comment, sub_type, total_amount) VALUES (?, ?, ?, ?, ?)", [voucherNumber, input.date, input.ledger_comment, input.sub_type ?? null, total]);
+    for (const entry of input.entries) await connection.execute("INSERT INTO journal_voucher_entries (journal_voucher_id, account_id, debit, credit) VALUES (?, ?, ?, ?)", [voucher.insertId, entry.account_id, entry.debit ?? 0, entry.credit ?? 0]);
+    await postAccountEntries(connection, { referenceType: "journal_voucher", referenceId: voucher.insertId, date: input.date, description: `Journal voucher ${voucherNumber}: ${input.ledger_comment}`, lines: input.entries.map(entry => ({ headCode: byId.get(entry.account_id)!, debit: entry.debit ?? 0, credit: entry.credit ?? 0 })) });
+    const [rows] = await connection.execute<any[]>(`${journalVoucherSelect} WHERE jv.id = ?`, [voucher.insertId]); await connection.commit(); res.status(201).json({ success: true, data: rows[0] });
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
+
+accountsRouter.get("/journal-vouchers", asyncHandler(async (req, res) => {
+  const query = z.object({ search: z.string().trim().max(100).optional(), date_from: z.string().date().optional(), date_to: z.string().date().optional() }).parse(req.query); const filters: string[] = []; const values: string[] = [];
+  if (query.search) { filters.push("(jv.voucher_number LIKE ? OR jv.ledger_comment LIKE ? OR debit.HeadName LIKE ? OR credit.HeadName LIKE ?)"); values.push(...Array(4).fill(`%${query.search}%`)); }
+  if (query.date_from) { filters.push("jv.voucher_date >= ?"); values.push(query.date_from); } if (query.date_to) { filters.push("jv.voucher_date <= ?"); values.push(query.date_to); }
+  const [rows] = await db.execute<any[]>(`${journalVoucherSelect}${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""} ORDER BY jv.voucher_date DESC, jv.id DESC`, values); res.json({ success: true, data: rows });
+}));
+
+accountsRouter.get("/journal-vouchers/:id", asyncHandler(async (req, res) => {
+  const voucherId = id.parse(req.params.id); const [rows] = await db.execute<any[]>(`${journalVoucherSelect} WHERE jv.id = ?`, [voucherId]); if (!rows[0]) throw new HttpError(404, "Journal voucher not found"); const [entries] = await db.execute<any[]>("SELECT jve.id, jve.account_id, coa.HeadCode AS account_head_code, coa.HeadName AS account_name, jve.debit, jve.credit FROM journal_voucher_entries jve JOIN account_coa coa ON coa.id = jve.account_id WHERE jve.journal_voucher_id = ? ORDER BY jve.id", [voucherId]); const [transactions] = await db.execute<any[]>("SELECT id, transaction_no AS transaction_number, transaction_date AS date, head_code, debit, credit, description FROM account_transactions WHERE reference_type = 'journal_voucher' AND reference_id = ? ORDER BY id", [voucherId]); res.json({ success: true, data: { ...rows[0], entries, transactions } });
 }));
 
 accountsRouter.post("/salary-payments", asyncHandler(async (req, res) => {
