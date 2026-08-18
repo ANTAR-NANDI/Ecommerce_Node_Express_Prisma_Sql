@@ -43,7 +43,16 @@ warehouseTransfersRouter.post("/", requireAuth, requireAdmin, asyncHandler(async
     if (input.requisitionId) { const [rows] = await connection.execute<any[]>("SELECT requesting_warehouse_id AS requestingWarehouseId, source_warehouse_id AS sourceWarehouseId, status FROM warehouse_requisitions WHERE id = ? FOR UPDATE", [input.requisitionId]); const requisition = rows[0]; if (!requisition || requisition.status !== "approved") throw new HttpError(400, "Only an approved requisition can create a transfer"); if (requisition.sourceWarehouseId !== input.fromWarehouseId || requisition.requestingWarehouseId !== input.toWarehouseId) throw new HttpError(400, "Transfer warehouses must match the requisition"); }
     const [result] = await connection.execute<any>("INSERT INTO warehouse_transfers (transfer_number, from_warehouse_id, to_warehouse_id, requisition_id, note) VALUES (?, ?, ?, ?, ?)", [transferNumber(), input.fromWarehouseId, input.toWarehouseId, input.requisitionId ?? null, input.note ?? null]);
     for (const item of grouped(input.items)) await connection.execute("INSERT INTO warehouse_transfer_items (transfer_id, product_id, quantity) VALUES (?, ?, ?)", [result.insertId, item.productId, item.quantity]);
-    if (input.requisitionId) await connection.execute("UPDATE warehouse_requisitions SET status = 'processing' WHERE id = ?", [input.requisitionId]);
+    const transfer = await transferDetails(result.insertId, connection);
+    for (const item of transfer!.items as any[]) {
+      const [stock] = await connection.execute<any>("UPDATE warehouse_stocks SET quantity = quantity - ? WHERE warehouse_id = ? AND product_id = ? AND quantity >= ?", [item.quantity, input.fromWarehouseId, item.productId, item.quantity]);
+      if (!stock.affectedRows) throw new HttpError(400, `Insufficient source stock for ${item.productName}`);
+      await connection.execute("INSERT INTO warehouse_stocks (warehouse_id, product_id, quantity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)", [input.toWarehouseId, item.productId, item.quantity]);
+      await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'transfer_out', ?, 'warehouse_transfer', ?, ?)", [input.fromWarehouseId, item.productId, -item.quantity, result.insertId, `Transfer to ${transfer!.toWarehouseName}`]);
+      await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'transfer_in', ?, 'warehouse_transfer', ?, ?)", [input.toWarehouseId, item.productId, item.quantity, result.insertId, `Transfer from ${transfer!.fromWarehouseName}`]);
+    }
+    await connection.execute("UPDATE warehouse_transfers SET status = 'received', shipped_at = NOW(), received_at = NOW() WHERE id = ?", [result.insertId]);
+    if (input.requisitionId) await connection.execute("UPDATE warehouse_requisitions SET status = 'fulfilled' WHERE id = ?", [input.requisitionId]);
     await connection.commit(); res.status(201).json({ success: true, data: await transferDetails(result.insertId, connection) });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));

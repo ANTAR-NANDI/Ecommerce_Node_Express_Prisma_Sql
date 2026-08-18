@@ -42,5 +42,6 @@ async function changeStatus(req: any, res: any, status: "approved" | "rejected" 
   const requisitionId = id.parse(req.params.id); const [result] = await db.execute<any>("UPDATE warehouse_requisitions SET status = ? WHERE id = ? AND status = 'pending'", [status, requisitionId]); if (!result.affectedRows) throw new HttpError(400, "Only a pending requisition can be changed this way"); res.json({ success: true, data: await requisitionDetails(requisitionId) });
 }
 warehouseRequisitionsRouter.patch("/:id/approve", requireAuth, requireAdmin, asyncHandler(async (req, res) => changeStatus(req, res, "approved")));
+warehouseRequisitionsRouter.post("/:id/approve", requireAuth, requireAdmin, asyncHandler(async (req, res) => changeStatus(req, res, "approved")));
 warehouseRequisitionsRouter.patch("/:id/reject", requireAuth, requireAdmin, asyncHandler(async (req, res) => changeStatus(req, res, "rejected")));
 warehouseRequisitionsRouter.patch("/:id/cancel", requireAuth, requireAdmin, asyncHandler(async (req, res) => changeStatus(req, res, "cancelled")));
