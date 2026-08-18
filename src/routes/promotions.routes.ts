@@ -41,4 +41,19 @@ function crud(path: string, table: string, select: string, schema: any, columns:
 crud("/flash-sales", "flash_sales", "SELECT id, name, minimum_discount AS minimumDiscount, start_date AS startDate, start_time AS startTime, end_date AS endDate, end_time AS endTime, description, image, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt", flashInput, { name: "name", minimumDiscount: "minimum_discount", startDate: "start_date", startTime: "start_time", endDate: "end_date", endTime: "end_time", description: "description", image: "image", isActive: "is_active" }, true, image);
 crud("/banners", "banners", "SELECT id, title, image, is_own_shop AS isOwnShop, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt", bannerInput, { title: "title", image: "image", isOwnShop: "is_own_shop", isActive: "is_active" }, true, image);
 crud("/ad-campaigns", "ad_campaigns", "SELECT id, title, image, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt", adInput, { title: "title", image: "image", isActive: "is_active" }, true, image);
+
+// Public storefront coupon feed: only coupons that can be used right now are exposed.
+promotionsRouter.get("/coupons", asyncHandler(async (_req, res) => {
+  const [rows] = await db.query<any[]>(`SELECT id, shop_ids AS shopIds, code, discount_type AS discountType, discount,
+    minimum_order_amount AS minimumOrderAmount, single_user_limit AS singleUserLimit,
+    maximum_discount_amount AS maximumDiscountAmount, start_date AS startDate, start_time AS startTime,
+    end_date AS endDate, end_time AS endTime
+    FROM promo_codes
+    WHERE is_active = TRUE
+      AND TIMESTAMP(start_date, start_time) <= NOW()
+      AND TIMESTAMP(end_date, end_time) >= NOW()
+    ORDER BY end_date, end_time, id`);
+  res.json({ success: true, data: rows.map(row => ({ ...row, shopIds: typeof row.shopIds === "string" ? JSON.parse(row.shopIds) : row.shopIds })) });
+}));
+
 crud("/promo-codes", "promo_codes", "SELECT id, shop_ids AS shopIds, code, discount_type AS discountType, discount, minimum_order_amount AS minimumOrderAmount, single_user_limit AS singleUserLimit, maximum_discount_amount AS maximumDiscountAmount, start_date AS startDate, start_time AS startTime, end_date AS endDate, end_time AS endTime, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt", promoInput, { shopIds: "shop_ids", code: "code", discountType: "discount_type", discount: "discount", minimumOrderAmount: "minimum_order_amount", singleUserLimit: "single_user_limit", maximumDiscountAmount: "maximum_discount_amount", startDate: "start_date", startTime: "start_time", endDate: "end_date", endTime: "end_time", isActive: "is_active" }, false, (_req, row) => ({ ...row, shopIds: typeof row.shopIds === "string" ? JSON.parse(row.shopIds) : row.shopIds }), true);
