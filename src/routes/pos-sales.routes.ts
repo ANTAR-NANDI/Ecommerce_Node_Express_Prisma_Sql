@@ -5,6 +5,7 @@ import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
 import { postAccountEntries } from "../lib/accounting";
+import { createPartyCoa } from "../lib/party-coa";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 
 export const posSalesRouter = Router();
@@ -16,17 +17,20 @@ const saleInput = z.object({
   warehouseId: id,
   customerId: z.preprocess(value => value === "" ? null : value, id.nullable().optional()),
   saleDate: z.string().trim().min(10).max(40).optional(),
-  paymentMethod: z.enum(["cash", "card", "mobile_banking", "bank_transfer"]),
+  paymentMethod: z.enum(["cash", "card", "mobile_banking", "bank_transfer", "transfer", "cheque"]),
   note: nullableText,
   discount: money.optional().default(0),
-  paidAmount: money,
-  items: z.array(z.object({ productId: id, quantity: z.coerce.number().int().positive(), unitPrice: money, discount: money.optional().default(0) })).min(1).max(100),
+  totalAmount: money.optional(),
+  grandTotal: money.optional(),
+  paidAmount: money.optional().default(0),
+  dueAmount: money.optional(),
+  items: z.array(z.object({ productId: id, sizeId: id.nullable().optional(), colorId: id.nullable().optional(), quantity: z.coerce.number().int().positive(), price: money, discount: money.optional().default(0) })).min(1).max(100),
 });
 
 const headerSelect = `SELECT ps.id, ps.sale_number AS saleNumber, ps.warehouse_id AS warehouseId,
   w.name AS warehouseName, ps.customer_id AS customerId, c.name AS customerName,
   ps.sale_date AS saleDate, ps.payment_method AS paymentMethod, ps.note,
-  ps.subtotal, ps.discount, ps.total_amount AS totalAmount, ps.paid_amount AS paidAmount,
+  ps.subtotal, ps.discount, ps.total_amount AS totalAmount, ps.grand_total AS grandTotal, ps.paid_amount AS paidAmount, ps.due_amount AS dueAmount,
   ps.change_amount AS changeAmount, ps.status, ps.created_at AS createdAt, ps.updated_at AS updatedAt
   FROM pos_sales ps
   JOIN warehouses w ON w.id = ps.warehouse_id
@@ -42,8 +46,10 @@ async function saleDetails(saleId: number, connection: any = db) {
   if (!sale) return null;
   const [items] = await connection.execute(
     `SELECT psi.id, psi.product_id AS productId, p.name AS productName, p.sku,
-      psi.quantity, psi.unit_price AS unitPrice, psi.discount, psi.line_total AS lineTotal
+      psi.size_id AS sizeId, s.name AS sizeName, psi.color_id AS colorId, clr.name AS colorName,
+      psi.quantity, psi.unit_price AS price, psi.discount, psi.line_total AS lineTotal
      FROM pos_sale_items psi JOIN products p ON p.id = psi.product_id
+     LEFT JOIN sizes s ON s.id = psi.size_id LEFT JOIN colors clr ON clr.id = psi.color_id
      WHERE psi.pos_sale_id = ? ORDER BY psi.id`,
     [saleId],
   );
@@ -77,16 +83,6 @@ posSalesRouter.get("/:id", asyncHandler(async (req, res) => {
 
 posSalesRouter.post("/", asyncHandler(async (req, res) => {
   const input = saleInput.parse(req.body);
-  const calculatedItems = input.items.map(item => {
-    const lineTotal = Number((item.quantity * item.unitPrice - item.discount).toFixed(2));
-    if (lineTotal < 0) throw new HttpError(400, `Item discount cannot exceed the price of product ID ${item.productId}`);
-    return { ...item, lineTotal };
-  });
-  const subtotal = Number(calculatedItems.reduce((total, item) => total + item.lineTotal, 0).toFixed(2));
-  if (input.discount > subtotal) throw new HttpError(400, "Sale discount cannot exceed the subtotal");
-  const totalAmount = Number((subtotal - input.discount).toFixed(2));
-  if (input.paidAmount < totalAmount) throw new HttpError(400, "Paid amount cannot be less than the total amount");
-  const changeAmount = Number((input.paidAmount - totalAmount).toFixed(2));
   const saleDate = input.saleDate ?? new Date().toISOString().slice(0, 19).replace("T", " ");
   const connection = await db.getConnection();
   try {
@@ -97,10 +93,32 @@ posSalesRouter.post("/", asyncHandler(async (req, res) => {
       const [customer] = await connection.execute<any[]>("SELECT id FROM customers WHERE id = ?", [input.customerId]);
       if (!customer.length) throw new HttpError(400, "Customer not found");
     }
+    const calculatedItems: Array<{ productId: number; sizeId: number | null; colorId: number | null; quantity: number; price: number; discount: number; lineTotal: number }> = [];
+    for (const item of input.items) {
+      if (item.sizeId) {
+        const [sizes] = await connection.execute<any[]>("SELECT 1 FROM product_sizes WHERE product_id = ? AND size_id = ?", [item.productId, item.sizeId]);
+        if (!sizes[0]) throw new HttpError(400, `Size ID ${item.sizeId} is not available for product ID ${item.productId}`);
+      }
+      if (item.colorId) {
+        const [colors] = await connection.execute<any[]>("SELECT 1 FROM product_colors WHERE product_id = ? AND color_id = ?", [item.productId, item.colorId]);
+        if (!colors[0]) throw new HttpError(400, `Color ID ${item.colorId} is not available for product ID ${item.productId}`);
+      }
+      const lineTotal = Number((item.quantity * item.price - item.discount).toFixed(2));
+      if (lineTotal < 0) throw new HttpError(400, `Item discount cannot exceed the price of product ID ${item.productId}`);
+      calculatedItems.push({ productId: item.productId, sizeId: item.sizeId ?? null, colorId: item.colorId ?? null, quantity: item.quantity, price: item.price, discount: item.discount, lineTotal });
+    }
+    const totalAmount = Number(calculatedItems.reduce((total, item) => total + item.lineTotal, 0).toFixed(2));
+    if (input.discount > totalAmount) throw new HttpError(400, "Sale discount cannot exceed total amount");
+    const grandTotal = Number((totalAmount - input.discount).toFixed(2));
+    if (input.paidAmount > grandTotal) throw new HttpError(400, "Paid amount cannot exceed grand total");
+    const dueAmount = Number((grandTotal - input.paidAmount).toFixed(2));
+    if (dueAmount > 0 && !input.customerId) throw new HttpError(400, "customerId is required when a POS sale has due amount");
+    const verifyAmount = (provided: number | undefined, calculated: number, name: string) => { if (provided !== undefined && Math.abs(provided - calculated) > 0.009) throw new HttpError(400, `${name} must match the calculated amount (${calculated})`); };
+    verifyAmount(input.totalAmount, totalAmount, "totalAmount"); verifyAmount(input.grandTotal, grandTotal, "grandTotal"); verifyAmount(input.dueAmount, dueAmount, "dueAmount");
     const [result] = await connection.execute<any>(
-      `INSERT INTO pos_sales (sale_number, warehouse_id, customer_id, sale_date, payment_method, note, subtotal, discount, total_amount, paid_amount, change_amount, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed')`,
-      [saleNumber(), input.warehouseId, input.customerId ?? null, saleDate, input.paymentMethod, input.note ?? null, subtotal, input.discount, totalAmount, input.paidAmount, changeAmount],
+      `INSERT INTO pos_sales (sale_number, warehouse_id, customer_id, sale_date, payment_method, note, subtotal, discount, total_amount, grand_total, paid_amount, due_amount, change_amount, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'completed')`,
+      [saleNumber(), input.warehouseId, input.customerId ?? null, saleDate, input.paymentMethod, input.note ?? null, totalAmount, input.discount, totalAmount, grandTotal, input.paidAmount, dueAmount],
     );
     for (const item of calculatedItems) {
       const [stock] = await connection.execute<any>(
@@ -110,12 +128,15 @@ posSalesRouter.post("/", asyncHandler(async (req, res) => {
       if (!stock.affectedRows) throw new HttpError(400, `Insufficient stock in this warehouse for product ID ${item.productId}`);
       const [product] = await connection.execute<any>("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND stock_quantity >= ?", [item.quantity, item.productId, item.quantity]);
       if (!product.affectedRows) throw new HttpError(400, `Product ID ${item.productId} was not found or does not have enough stock`);
-      await connection.execute("INSERT INTO pos_sale_items (pos_sale_id, product_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.quantity, item.unitPrice, item.discount, item.lineTotal]);
+      await connection.execute("INSERT INTO pos_sale_items (pos_sale_id, product_id, size_id, color_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.sizeId, item.colorId, item.quantity, item.price, item.discount, item.lineTotal]);
       await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'pos_sale', ?, 'pos_sale', ?, ?)", [input.warehouseId, item.productId, -item.quantity, result.insertId, input.note ?? "POS sale"]);
     }
     const [costRows] = await connection.execute<any[]>("SELECT COALESCE(SUM(psi.quantity * p.buying_price), 0) AS cost FROM pos_sale_items psi JOIN products p ON p.id = psi.product_id WHERE psi.pos_sale_id = ?", [result.insertId]);
     const cost = Number(costRows[0].cost);
-    await postAccountEntries(connection, { referenceType: "pos_sale", referenceId: result.insertId, date: saleDate, customerId: input.customerId ?? null, description: `POS sale ${result.insertId}`, lines: [{ headCode: 1000101, debit: totalAmount }, { headCode: 4000101, credit: totalAmount }, { headCode: 5000107, debit: cost }, { headCode: 1000108, credit: cost }] });
+    const saleLines: Array<{ headCode: number; debit?: number; credit?: number }> = [{ headCode: 1000101, debit: input.paidAmount }];
+    if (dueAmount > 0 && input.customerId) { const [customers] = await connection.execute<any[]>("SELECT name FROM customers WHERE id = ?", [input.customerId]); const customerCoa = await createPartyCoa("customer", input.customerId, customers[0].name, connection); saleLines.push({ headCode: Number(customerCoa.HeadCode), debit: dueAmount }); }
+    saleLines.push({ headCode: 4000101, credit: grandTotal }, { headCode: 5000107, debit: cost }, { headCode: 1000108, credit: cost });
+    await postAccountEntries(connection, { referenceType: "pos_sale", referenceId: result.insertId, date: saleDate, customerId: input.customerId ?? null, description: `POS sale ${result.insertId}`, lines: saleLines });
     await connection.commit();
     res.status(201).json({ success: true, data: await saleDetails(result.insertId, connection) });
   } catch (error) {
