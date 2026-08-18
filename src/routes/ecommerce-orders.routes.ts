@@ -22,22 +22,32 @@ const customerInput = z.object({
   address: z.string().trim().min(5).max(2000),
 });
 const orderInput = z.object({
-  warehouseId: id,
   customer: customerInput,
-  paymentMethod: z.enum(["cod", "card", "mobile_banking", "bank_transfer"]),
-  shippingCost: money.optional().default(0),
+  paymentMethod: z.enum(["cod", "cash", "card", "mobile_banking", "bank_transfer", "transfer", "cheque"]),
   discount: money.optional().default(0),
+  // These values are accepted for a clear frontend/Postman payload, then checked
+  // against the server calculation. Product pricing is never trusted from client input.
+  totalAmount: money.optional(),
+  grandTotal: money.optional(),
+  paidAmount: money.optional().default(0),
+  dueAmount: money.optional(),
   note: z.preprocess(value => value === "" ? null : value, z.string().trim().max(1000).nullable().optional()),
-  // Prices are intentionally absent: a public frontend must never be trusted to set product prices.
-  items: z.array(z.object({ productId: id, sizeId: id.nullable().optional(), quantity: z.coerce.number().int().positive() })).min(1).max(100),
+  items: z.array(z.object({
+    productId: id,
+    sizeId: id.nullable().optional(),
+    colorId: id.nullable().optional(),
+    quantity: z.coerce.number().int().positive(),
+    price: money.optional(),
+  })).min(1).max(100),
 });
 const headerSelect = `SELECT eo.id, eo.order_number AS orderNumber, eo.warehouse_id AS warehouseId,
   w.name AS warehouseName, eo.customer_id AS customerId, c.name AS customerName, c.phone AS customerPhone,
   c.email AS customerEmail, eo.order_date AS orderDate, eo.status, eo.payment_method AS paymentMethod,
   eo.payment_status AS paymentStatus, eo.shipping_address AS shippingAddress, eo.note,
-  eo.subtotal, eo.discount, eo.shipping_cost AS shippingCost, eo.total_amount AS totalAmount,
+  eo.subtotal, eo.discount, eo.total_amount AS totalAmount, eo.grand_total AS grandTotal,
+  eo.paid_amount AS paidAmount, eo.due_amount AS dueAmount,
   eo.created_at AS createdAt, eo.updated_at AS updatedAt
-  FROM ecommerce_orders eo JOIN warehouses w ON w.id = eo.warehouse_id
+  FROM ecommerce_orders eo LEFT JOIN warehouses w ON w.id = eo.warehouse_id
   JOIN customers c ON c.id = eo.customer_id`;
 
 function orderNumber() { return `ORD-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`; }
@@ -45,11 +55,30 @@ async function orderDetails(orderId: number, connection: any = db) {
   const [headers] = await connection.execute(`${headerSelect} WHERE eo.id = ?`, [orderId]);
   const order = (headers as any[])[0]; if (!order) return null;
   const [items] = await connection.execute(`SELECT eoi.id, eoi.product_id AS productId, p.name AS productName, p.sku,
-    eoi.size_id AS sizeId, s.name AS sizeName,
-    eoi.quantity, eoi.unit_price AS unitPrice, eoi.discount, eoi.line_total AS lineTotal
-    FROM ecommerce_order_items eoi JOIN products p ON p.id = eoi.product_id LEFT JOIN sizes s ON s.id = eoi.size_id
+    eoi.size_id AS sizeId, s.name AS sizeName, eoi.color_id AS colorId, clr.name AS colorName,
+    eoi.quantity, eoi.unit_price AS price, eoi.discount, eoi.line_total AS lineTotal
+    FROM ecommerce_order_items eoi JOIN products p ON p.id = eoi.product_id
+    LEFT JOIN sizes s ON s.id = eoi.size_id LEFT JOIN colors clr ON clr.id = eoi.color_id
     WHERE eoi.ecommerce_order_id = ? ORDER BY eoi.id`, [orderId]);
   return { ...order, items };
+}
+
+// Stock is reserved only after an administrator chooses the fulfilment warehouse.
+async function allocateWarehouseStock(connection: any, order: any, warehouseId: number) {
+  if (order.warehouseId) {
+    if (Number(order.warehouseId) !== warehouseId) throw new HttpError(400, "This order already has a warehouse assigned");
+    return;
+  }
+  const [warehouses] = await connection.execute("SELECT id FROM warehouses WHERE id = ? AND is_active = TRUE", [warehouseId]);
+  if (!warehouses[0]) throw new HttpError(400, "Active warehouse not found");
+  for (const item of order.items as any[]) {
+    const [stock] = await connection.execute("UPDATE warehouse_stocks SET quantity = quantity - ? WHERE warehouse_id = ? AND product_id = ? AND quantity >= ?", [item.quantity, warehouseId, item.productId, item.quantity]);
+    if (!stock.affectedRows) throw new HttpError(400, `Insufficient stock in warehouse for product ID ${item.productId}`);
+    const [product] = await connection.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND stock_quantity >= ?", [item.quantity, item.productId, item.quantity]);
+    if (!product.affectedRows) throw new HttpError(400, `Product ID ${item.productId} does not have enough stock`);
+    await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'ecommerce_order', ?, 'ecommerce_order', ?, 'E-commerce order reserved stock')", [warehouseId, item.productId, -item.quantity, order.id, "E-commerce order warehouse assigned"]);
+  }
+  await connection.execute("UPDATE ecommerce_orders SET warehouse_id = ? WHERE id = ?", [warehouseId, order.id]);
 }
 
 // Public: called by the shop frontend during checkout. It creates or reuses a customer by phone number.
@@ -58,9 +87,7 @@ ecommerceOrdersRouter.post("/", asyncHandler(async (req, res) => {
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
-    const [warehouse] = await connection.execute<any[]>("SELECT id FROM warehouses WHERE id = ? AND is_active = 1", [input.warehouseId]);
-    if (!warehouse.length) throw new HttpError(400, "Active warehouse not found");
-    const items: Array<{ productId: number; sizeId: number | null; quantity: number; unitPrice: number; discount: number; lineTotal: number }> = [];
+    const items: Array<{ productId: number; sizeId: number | null; colorId: number | null; quantity: number; unitPrice: number; discount: number; lineTotal: number }> = [];
     for (const requestedItem of input.items) {
       const [products] = await connection.execute<any[]>("SELECT id, selling_price AS sellingPrice, discount_type AS discountType, discount FROM products WHERE id = ? AND is_active = 1", [requestedItem.productId]);
       if (!products[0]) throw new HttpError(400, `Active product ID ${requestedItem.productId} was not found`);
@@ -72,12 +99,25 @@ ecommerceOrdersRouter.post("/", asyncHandler(async (req, res) => {
         if (!sizes[0]) throw new HttpError(400, `Size ID ${requestedItem.sizeId} is not available for product ID ${requestedItem.productId}`);
         extraPrice = Number(sizes[0].extraPrice);
       }
+      if (requestedItem.colorId) {
+        const [colors] = await connection.execute<any[]>("SELECT 1 FROM product_colors WHERE product_id = ? AND color_id = ?", [requestedItem.productId, requestedItem.colorId]);
+        if (!colors[0]) throw new HttpError(400, `Color ID ${requestedItem.colorId} is not available for product ID ${requestedItem.productId}`);
+      }
       const unitPrice = Number((basePrice + extraPrice).toFixed(2));
-      items.push({ productId: requestedItem.productId, sizeId: requestedItem.sizeId ?? null, quantity: requestedItem.quantity, unitPrice, discount: 0, lineTotal: Number((requestedItem.quantity * unitPrice).toFixed(2)) });
+      if (requestedItem.price !== undefined && Math.abs(requestedItem.price - unitPrice) > 0.009) throw new HttpError(400, `Price for product ID ${requestedItem.productId} has changed. Current price is ${unitPrice}`);
+      items.push({ productId: requestedItem.productId, sizeId: requestedItem.sizeId ?? null, colorId: requestedItem.colorId ?? null, quantity: requestedItem.quantity, unitPrice, discount: 0, lineTotal: Number((requestedItem.quantity * unitPrice).toFixed(2)) });
     }
-    const subtotal = Number(items.reduce((sum, item) => sum + item.lineTotal, 0).toFixed(2));
-    if (input.discount > subtotal) throw new HttpError(400, "Order discount cannot exceed the subtotal");
-    const totalAmount = Number((subtotal - input.discount + input.shippingCost).toFixed(2));
+    const totalAmount = Number(items.reduce((sum, item) => sum + item.lineTotal, 0).toFixed(2));
+    if (input.discount > totalAmount) throw new HttpError(400, "Order discount cannot exceed total amount");
+    const grandTotal = Number((totalAmount - input.discount).toFixed(2));
+    if (input.paidAmount > grandTotal) throw new HttpError(400, "Paid amount cannot exceed grand total");
+    const dueAmount = Number((grandTotal - input.paidAmount).toFixed(2));
+    const verifyAmount = (provided: number | undefined, calculated: number, name: string) => {
+      if (provided !== undefined && Math.abs(provided - calculated) > 0.009) throw new HttpError(400, `${name} must match the server-calculated amount (${calculated})`);
+    };
+    verifyAmount(input.totalAmount, totalAmount, "totalAmount");
+    verifyAmount(input.grandTotal, grandTotal, "grandTotal");
+    verifyAmount(input.dueAmount, dueAmount, "dueAmount");
     const [existingCustomer] = await connection.execute<any[]>("SELECT id FROM customers WHERE phone = ?", [input.customer.phone]);
     let customerId: number;
     if (existingCustomer[0]) {
@@ -88,15 +128,10 @@ ecommerceOrdersRouter.post("/", asyncHandler(async (req, res) => {
       customerId = customer.insertId;
       await createPartyCoa("customer", customerId, input.customer.name, connection);
     }
-    const [result] = await connection.execute<any>(`INSERT INTO ecommerce_orders (order_number, warehouse_id, customer_id, order_date, payment_method, payment_status, shipping_address, note, subtotal, discount, shipping_cost, total_amount, status)
-      VALUES (?, ?, ?, NOW(), ?, 'pending', ?, ?, ?, ?, ?, ?, 'pending')`, [orderNumber(), input.warehouseId, customerId, input.paymentMethod, input.customer.address, input.note ?? null, subtotal, input.discount, input.shippingCost, totalAmount]);
+    const [result] = await connection.execute<any>(`INSERT INTO ecommerce_orders (order_number, warehouse_id, customer_id, order_date, payment_method, payment_status, shipping_address, note, subtotal, discount, shipping_cost, total_amount, grand_total, paid_amount, due_amount, status)
+      VALUES (?, NULL, ?, NOW(), ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending')`, [orderNumber(), customerId, input.paymentMethod, dueAmount === 0 ? "paid" : "pending", input.customer.address, input.note ?? null, totalAmount, input.discount, totalAmount, grandTotal, input.paidAmount, dueAmount]);
     for (const item of items) {
-      const [stock] = await connection.execute<any>("UPDATE warehouse_stocks SET quantity = quantity - ? WHERE warehouse_id = ? AND product_id = ? AND quantity >= ?", [item.quantity, input.warehouseId, item.productId, item.quantity]);
-      if (!stock.affectedRows) throw new HttpError(400, `Insufficient stock in this warehouse for product ID ${item.productId}`);
-      const [product] = await connection.execute<any>("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND stock_quantity >= ?", [item.quantity, item.productId, item.quantity]);
-      if (!product.affectedRows) throw new HttpError(400, `Product ID ${item.productId} was not found or does not have enough stock`);
-      await connection.execute("INSERT INTO ecommerce_order_items (ecommerce_order_id, product_id, size_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.sizeId, item.quantity, item.unitPrice, item.discount, item.lineTotal]);
-      await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'ecommerce_order', ?, 'ecommerce_order', ?, ?)", [input.warehouseId, item.productId, -item.quantity, result.insertId, "E-commerce order reserved stock"]);
+      await connection.execute("INSERT INTO ecommerce_order_items (ecommerce_order_id, product_id, size_id, color_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.sizeId, item.colorId, item.quantity, item.unitPrice, item.discount, item.lineTotal]);
     }
     await connection.commit();
     // Do not expose the full admin order list: checkout receives only its new order.
@@ -125,24 +160,32 @@ ecommerceOrdersRouter.get("/:id", requireAuth, requireAdmin, asyncHandler(async 
 // Convenience action for admin order-confirm buttons. Only pending orders can be confirmed.
 ecommerceOrdersRouter.patch("/:id/confirm", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   const orderId = id.parse(req.params.id);
-  const [result] = await db.execute<any>("UPDATE ecommerce_orders SET status = 'confirmed' WHERE id = ? AND status = 'pending'", [orderId]);
-  if (!result.affectedRows) {
-    const order = await orderDetails(orderId);
+  const { warehouseId } = z.object({ warehouseId: id }).parse(req.body);
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const order = await orderDetails(orderId, connection);
     if (!order) throw new HttpError(404, "E-commerce order not found");
-    throw new HttpError(400, "Only a pending order can be confirmed");
-  }
-  res.json({ success: true, data: await orderDetails(orderId) });
+    if (order.status !== "pending") throw new HttpError(400, "Only a pending order can be confirmed");
+    await allocateWarehouseStock(connection, order, warehouseId);
+    await connection.execute("UPDATE ecommerce_orders SET status = 'confirmed' WHERE id = ?", [orderId]);
+    await connection.commit();
+    res.json({ success: true, data: await orderDetails(orderId, connection) });
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
 
 // Update the operational or payment status. Setting status to cancelled restores the reserved stock.
 ecommerceOrdersRouter.patch("/:id/status", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   const orderId = id.parse(req.params.id);
-  const input = z.object({ status: orderStatusInput.optional(), paymentStatus: paymentStatusInput.optional() }).refine(value => value.status || value.paymentStatus, "Provide status or paymentStatus").parse(req.body);
+  const input = z.object({ status: orderStatusInput.optional(), paymentStatus: paymentStatusInput.optional(), warehouseId: id.optional() }).refine(value => value.status || value.paymentStatus || value.warehouseId, "Provide status, paymentStatus, or warehouseId").parse(req.body);
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction(); const order = await orderDetails(orderId, connection);
     if (!order) throw new HttpError(404, "E-commerce order not found");
+    if (input.warehouseId) await allocateWarehouseStock(connection, order, input.warehouseId);
+    if (["confirmed", "processing", "pickup", "on_the_way", "delivered"].includes(input.status ?? order.status) && !order.warehouseId && !input.warehouseId) throw new HttpError(400, "warehouseId is required before confirming or fulfilling an order");
     if (input.status === "cancelled" && order.status !== "cancelled") {
+      if (!order.warehouseId) throw new HttpError(400, "An unassigned order cannot have stock restored");
       for (const item of order.items as any[]) {
         await connection.execute("INSERT INTO warehouse_stocks (warehouse_id, product_id, quantity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)", [order.warehouseId, item.productId, item.quantity]);
         await connection.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", [item.quantity, item.productId]);
@@ -157,14 +200,15 @@ ecommerceOrdersRouter.patch("/:id/status", requireAuth, requireAdmin, asyncHandl
     if (status === "delivered" && order.status !== "delivered") {
       const [costRows] = await connection.execute<any[]>("SELECT COALESCE(SUM(eoi.quantity * p.buying_price), 0) AS cost FROM ecommerce_order_items eoi JOIN products p ON p.id = eoi.product_id WHERE eoi.ecommerce_order_id = ?", [orderId]);
       const cost = Number(costRows[0].cost);
-      await postAccountEntries(connection, { referenceType: "ecommerce_order", referenceId: orderId, customerId: order.customerId, description: `Ecommerce order ${order.orderNumber} delivered`, lines: [{ headCode: Number(customerCoa.HeadCode), debit: Number(order.totalAmount) }, { headCode: 4000101, credit: Number(order.totalAmount) }, { headCode: 5000107, debit: cost }, { headCode: 1000108, credit: cost }] });
+      await postAccountEntries(connection, { referenceType: "ecommerce_order", referenceId: orderId, customerId: order.customerId, description: `Ecommerce order ${order.orderNumber} delivered`, lines: [{ headCode: Number(customerCoa.HeadCode), debit: Number(order.grandTotal) }, { headCode: 4000101, credit: Number(order.grandTotal) }, { headCode: 5000107, debit: cost }, { headCode: 1000108, credit: cost }] });
     }
-    if (paymentStatus === "paid" && order.paymentStatus !== "paid") await postAccountEntries(connection, { referenceType: "ecommerce_payment", referenceId: orderId, customerId: order.customerId, description: `Ecommerce order ${order.orderNumber} payment`, lines: [{ headCode: 1000101, debit: Number(order.totalAmount) }, { headCode: Number(customerCoa.HeadCode), credit: Number(order.totalAmount) }] });
+    if (paymentStatus === "paid" && order.paymentStatus !== "paid") await postAccountEntries(connection, { referenceType: "ecommerce_payment", referenceId: orderId, customerId: order.customerId, description: `Ecommerce order ${order.orderNumber} payment`, lines: [{ headCode: 1000101, debit: Number(order.grandTotal) }, { headCode: Number(customerCoa.HeadCode), credit: Number(order.grandTotal) }] });
+    if (paymentStatus === "paid") await connection.execute("UPDATE ecommerce_orders SET paid_amount = grand_total, due_amount = 0 WHERE id = ?", [orderId]);
     await connection.commit(); res.json({ success: true, data: await orderDetails(orderId, connection) });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
 
 ecommerceOrdersRouter.patch("/:id/payment-status", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   const orderId = id.parse(req.params.id); const { paymentStatus } = z.object({ paymentStatus: paymentStatusInput }).parse(req.body);
-  const connection = await db.getConnection(); try { await connection.beginTransaction(); const order = await orderDetails(orderId, connection); if (!order) throw new HttpError(404, "E-commerce order not found"); await connection.execute("UPDATE ecommerce_orders SET payment_status = ? WHERE id = ?", [paymentStatus, orderId]); if (paymentStatus === "paid" && order.paymentStatus !== "paid") { const [customers] = await connection.execute<any[]>("SELECT name FROM customers WHERE id = ?", [order.customerId]); const customerCoa = await createPartyCoa("customer", order.customerId, customers[0].name, connection); await postAccountEntries(connection, { referenceType: "ecommerce_payment", referenceId: orderId, customerId: order.customerId, description: `Ecommerce order ${order.orderNumber} payment`, lines: [{ headCode: 1000101, debit: Number(order.totalAmount) }, { headCode: Number(customerCoa.HeadCode), credit: Number(order.totalAmount) }] }); } await connection.commit(); res.json({ success: true, data: await orderDetails(orderId, connection) }); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+  const connection = await db.getConnection(); try { await connection.beginTransaction(); const order = await orderDetails(orderId, connection); if (!order) throw new HttpError(404, "E-commerce order not found"); await connection.execute("UPDATE ecommerce_orders SET payment_status = ? WHERE id = ?", [paymentStatus, orderId]); if (paymentStatus === "paid" && order.paymentStatus !== "paid") { const [customers] = await connection.execute<any[]>("SELECT name FROM customers WHERE id = ?", [order.customerId]); const customerCoa = await createPartyCoa("customer", order.customerId, customers[0].name, connection); await postAccountEntries(connection, { referenceType: "ecommerce_payment", referenceId: orderId, customerId: order.customerId, description: `Ecommerce order ${order.orderNumber} payment`, lines: [{ headCode: 1000101, debit: Number(order.grandTotal) }, { headCode: Number(customerCoa.HeadCode), credit: Number(order.grandTotal) }] }); await connection.execute("UPDATE ecommerce_orders SET paid_amount = grand_total, due_amount = 0 WHERE id = ?", [orderId]); } await connection.commit(); res.json({ success: true, data: await orderDetails(orderId, connection) }); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));

@@ -12,7 +12,7 @@ const id = z.coerce.number().int().positive();
 const optionalText = (max: number) => z.preprocess(value => value === "" ? null : value, z.string().trim().max(max).nullable().optional());
 const addressInput = z.object({ name: z.string().trim().min(2).max(150), phone: z.string().trim().min(6).max(30), area: z.string().trim().min(1).max(100), addressLine: z.string().trim().min(5).max(2000), addressTag: z.enum(["home", "office", "other", "HOME", "OFFICE", "OTHER"]).transform(value => value.toLowerCase() as "home" | "office" | "other").optional(), isDefault: z.preprocess(value => value === "true" ? true : value === "false" ? false : value, z.boolean().optional()) });
 const addressSelect = "SELECT id, name, phone, area, address_line AS addressLine, address_tag AS addressTag, is_default AS isDefault, created_at AS createdAt, updated_at AS updatedAt FROM customer_addresses";
-const orderSelect = `SELECT eo.id, eo.order_number AS orderNumber, eo.order_date AS orderDate, eo.status, eo.payment_method AS paymentMethod, eo.payment_status AS paymentStatus, eo.shipping_address AS shippingAddress, eo.subtotal, eo.discount, eo.shipping_cost AS shippingCost, eo.total_amount AS totalAmount, eo.created_at AS createdAt FROM ecommerce_orders eo`;
+const orderSelect = `SELECT eo.id, eo.order_number AS orderNumber, eo.order_date AS orderDate, eo.status, eo.payment_method AS paymentMethod, eo.payment_status AS paymentStatus, eo.shipping_address AS shippingAddress, eo.subtotal, eo.discount, eo.total_amount AS totalAmount, eo.grand_total AS grandTotal, eo.paid_amount AS paidAmount, eo.due_amount AS dueAmount, eo.created_at AS createdAt FROM ecommerce_orders eo`;
 
 customerDashboardRouter.use(requireCustomer);
 const customerId = (req: any) => req.user!.userId as number;
@@ -38,7 +38,7 @@ customerDashboardRouter.get("/orders", asyncHandler(async (req, res) => {
 }));
 customerDashboardRouter.get("/orders/:id", asyncHandler(async (req, res) => {
   const orderId = id.parse(req.params.id); const [orders] = await db.execute<any[]>(`${orderSelect} WHERE eo.id = ? AND eo.customer_id = ?`, [orderId, customerId(req)]); if (!orders[0]) throw new HttpError(404, "Order not found");
-  const [items] = await db.execute<any[]>("SELECT eoi.id, eoi.product_id AS productId, p.name AS productName, p.sku, eoi.quantity, eoi.unit_price AS unitPrice, eoi.discount, eoi.line_total AS lineTotal FROM ecommerce_order_items eoi JOIN products p ON p.id = eoi.product_id WHERE eoi.ecommerce_order_id = ? ORDER BY eoi.id", [orderId]);
+  const [items] = await db.execute<any[]>("SELECT eoi.id, eoi.product_id AS productId, p.name AS productName, p.sku, eoi.size_id AS sizeId, eoi.color_id AS colorId, eoi.quantity, eoi.unit_price AS price, eoi.discount, eoi.line_total AS lineTotal FROM ecommerce_order_items eoi JOIN products p ON p.id = eoi.product_id WHERE eoi.ecommerce_order_id = ? ORDER BY eoi.id", [orderId]);
   res.json({ success: true, data: { ...orders[0], items } });
 }));
 
