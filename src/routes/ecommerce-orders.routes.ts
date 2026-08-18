@@ -122,6 +122,18 @@ ecommerceOrdersRouter.get("/:id", requireAuth, requireAdmin, asyncHandler(async 
   const order = await orderDetails(id.parse(req.params.id)); if (!order) throw new HttpError(404, "E-commerce order not found"); res.json({ success: true, data: order });
 }));
 
+// Convenience action for admin order-confirm buttons. Only pending orders can be confirmed.
+ecommerceOrdersRouter.patch("/:id/confirm", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
+  const orderId = id.parse(req.params.id);
+  const [result] = await db.execute<any>("UPDATE ecommerce_orders SET status = 'confirmed' WHERE id = ? AND status = 'pending'", [orderId]);
+  if (!result.affectedRows) {
+    const order = await orderDetails(orderId);
+    if (!order) throw new HttpError(404, "E-commerce order not found");
+    throw new HttpError(400, "Only a pending order can be confirmed");
+  }
+  res.json({ success: true, data: await orderDetails(orderId) });
+}));
+
 // Update the operational or payment status. Setting status to cancelled restores the reserved stock.
 ecommerceOrdersRouter.patch("/:id/status", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   const orderId = id.parse(req.params.id);
