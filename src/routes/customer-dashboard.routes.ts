@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "../config/db";
 import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
+import { publicImageUrl } from "../lib/public-image-url";
 import { requireCustomer } from "../middleware/customer-auth";
 
 export const customerDashboardRouter = Router();
@@ -47,8 +48,8 @@ customerDashboardRouter.get("/returns", asyncHandler(async (req, res) => {
 }));
 
 customerDashboardRouter.get("/wishlist", asyncHandler(async (req, res) => {
-  const [rows] = await db.execute<any[]>("SELECT pf.product_id AS productId, pf.created_at AS createdAt, p.name, p.slug, p.selling_price AS sellingPrice, p.image AS image FROM product_favorites pf JOIN products p ON p.id = pf.product_id WHERE pf.customer_id = ? ORDER BY pf.created_at DESC", [customerId(req)]);
-  res.json({ success: true, data: rows });
+  const [rows] = await db.execute<any[]>("SELECT pf.product_id AS productId, pf.created_at AS createdAt, p.name, p.slug, p.selling_price AS sellingPrice, (SELECT pi.filename FROM product_images pi WHERE pi.product_id = p.id AND pi.image_type = 'thumbnail' ORDER BY pi.sort_order, pi.id LIMIT 1) AS image FROM product_favorites pf JOIN products p ON p.id = pf.product_id WHERE pf.customer_id = ? ORDER BY pf.created_at DESC", [customerId(req)]);
+  res.json({ success: true, data: rows.map(row => ({ ...row, image: row.image ? publicImageUrl(req, "product", row.image) : null })) });
 }));
 customerDashboardRouter.post("/wishlist/:productId", asyncHandler(async (req, res) => {
   const productId = id.parse(req.params.productId); const currentCustomerId = customerId(req); const [products] = await db.execute<any[]>("SELECT id FROM products WHERE id = ? AND is_active = TRUE", [productId]); if (!products[0]) throw new HttpError(404, "Product not found");
