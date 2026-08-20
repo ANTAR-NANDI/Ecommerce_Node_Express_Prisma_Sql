@@ -35,6 +35,9 @@ import { warehouseRequisitionsRouter } from "./routes/warehouse-requisitions.rou
 import { warehouseTransfersRouter } from "./routes/warehouse-transfers.routes";
 import { uploadsRouter } from "./routes/uploads.routes";
 import { themesRouter } from "./routes/themes.routes";
+import { cmsPagesRouter, storefrontPagesRouter } from "./routes/cms-pages.routes";
+import { cmsLayoutRouter, publicMenusRouter, storefrontFooterRouter } from "./routes/cms-layout.routes";
+import { cmsSectionsRouter, storefrontSectionsRouter } from "./routes/cms-sections.routes";
 
 const app = express();
 const allowedOrigins = env.CORS_ORIGIN.split(",").map(origin => origin.trim()).filter(Boolean);
@@ -95,6 +98,11 @@ app.use("/contact-us", publicCategoriesOnly, contactUsRouter);
 app.use("/orders", publicCheckoutOnly, ecommerceOrdersRouter);
 app.use("/themes", themesRouter);
 app.use("/storefront", themesRouter);
+app.use("/storefront/pages", storefrontPagesRouter);
+app.use("/storefront/pages", storefrontSectionsRouter);
+app.use("/pages", storefrontPagesRouter);
+app.use("/menus", publicMenusRouter);
+app.use("/storefront/footer", storefrontFooterRouter);
 app.use("/customer", customerDashboardRouter);
 app.use("/dashboard", customerDashboardRouter);
 
@@ -127,6 +135,9 @@ app.use("/admin/warehouses", warehousesRouter);
 app.use("/admin/warehouse-requisitions", warehouseRequisitionsRouter);
 app.use("/admin/warehouse-transfers", warehouseTransfersRouter);
 app.use("/admin/themes", themesRouter);
+app.use("/admin/cms/pages", cmsPagesRouter);
+app.use("/admin/cms", cmsLayoutRouter);
+app.use("/admin/cms", cmsSectionsRouter);
 app.use("/admin/uploads", uploadsRouter);
 
 app.use(notFoundHandler);
