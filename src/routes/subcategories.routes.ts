@@ -78,8 +78,12 @@ subcategoriesRouter.post("/", requireAuth, requireAdmin, uploadSubcategoryImage.
     await connection.commit(); res.status(201).json({ success: true, data: (await withCategories(req, rows, connection))[0] });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
-subcategoriesRouter.patch("/:id", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
-  const subcategoryId = id.parse(req.params.id); const input = updateInput.parse(req.body); if (!Object.keys(input).length) throw new HttpError(400, "Provide at least one field to update");
+subcategoriesRouter.patch("/:id", requireAuth, requireAdmin, uploadSubcategoryImage.single("image"), asyncHandler(async (req, res) => {
+  const subcategoryId = id.parse(req.params.id);
+  const updateBody = { ...(req.body ?? {}) };
+  if (req.file) updateBody.image = req.file.filename;
+  const input = updateInput.parse(updateBody);
+  if (!Object.keys(input).length) throw new HttpError(400, "Provide at least one field to update");
   const ids = selectedCategoryIds(input); const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
