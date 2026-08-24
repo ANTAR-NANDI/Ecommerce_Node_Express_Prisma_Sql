@@ -23,3 +23,8 @@ export function requireAdmin(req: Request, _res: Response, next: NextFunction) {
   if (req.user?.role !== "admin") return next(new HttpError(403, "Admin access is required"));
   next();
 }
+
+export function requireCustomer(req: Request, _res: Response, next: NextFunction) {
+  if (req.user?.role !== "customer") return next(new HttpError(403, "Customer access is required"));
+  next();
+}

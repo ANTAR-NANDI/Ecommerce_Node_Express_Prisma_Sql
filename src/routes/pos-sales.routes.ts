@@ -13,9 +13,16 @@ export const posSalesRouter = Router();
 const id = z.coerce.number().int().positive();
 const money = z.coerce.number().min(0);
 const nullableText = z.preprocess(value => value === "" ? null : value, z.string().trim().max(1000).nullable().optional());
+const posCustomerInput = z.object({
+  name: z.string().trim().min(2).max(150),
+  phone: z.string().trim().min(6).max(30),
+  email: z.preprocess(value => value === "" ? null : value, z.string().email().nullable().optional()),
+  address: z.preprocess(value => value === "" ? null : value, z.string().trim().max(2000).nullable().optional()),
+});
 const saleInput = z.object({
   warehouseId: id,
   customerId: z.preprocess(value => value === "" ? null : value, id.nullable().optional()),
+  customer: posCustomerInput.optional(),
   saleDate: z.string().trim().min(10).max(40).optional(),
   paymentMethod: z.enum(["cash", "card", "mobile_banking", "bank_transfer", "transfer", "cheque"]),
   note: nullableText,
@@ -25,6 +32,8 @@ const saleInput = z.object({
   paidAmount: money.optional().default(0),
   dueAmount: money.optional(),
   items: z.array(z.object({ productId: id, sizeId: id.nullable().optional(), colorId: id.nullable().optional(), quantity: z.coerce.number().int().positive(), price: money, discount: money.optional().default(0) })).min(1).max(100),
+}).superRefine((input, ctx) => {
+  if (input.customerId && input.customer) ctx.addIssue({ code: "custom", path: ["customer"], message: "Send either customerId or customer details, not both" });
 });
 
 const headerSelect = `SELECT ps.id, ps.sale_number AS saleNumber, ps.warehouse_id AS warehouseId,
@@ -89,9 +98,22 @@ posSalesRouter.post("/", asyncHandler(async (req, res) => {
     await connection.beginTransaction();
     const [warehouse] = await connection.execute<any[]>("SELECT id FROM warehouses WHERE id = ? AND is_active = 1", [input.warehouseId]);
     if (!warehouse.length) throw new HttpError(400, "Active warehouse not found");
-    if (input.customerId) {
-      const [customer] = await connection.execute<any[]>("SELECT id FROM customers WHERE id = ?", [input.customerId]);
-      if (!customer.length) throw new HttpError(400, "Customer not found");
+    let customerId = input.customerId ?? null;
+    let customerName: string | null = null;
+    if (customerId) {
+      const [customers] = await connection.execute<any[]>("SELECT id, name FROM customers WHERE id = ? AND is_active = TRUE", [customerId]);
+      if (!customers[0]) throw new HttpError(400, "Active customer not found");
+      customerName = customers[0].name;
+      await createPartyCoa("customer", Number(customerId), customerName!, connection);
+    } else if (input.customer) {
+      const [customers] = await connection.execute<any[]>("SELECT id, name FROM customers WHERE phone = ? LIMIT 1", [input.customer.phone]);
+      if (customers[0]) {
+        customerId = Number(customers[0].id); customerName = customers[0].name;
+      } else {
+        const [customer] = await connection.execute<any>("INSERT INTO customers (name, phone, email, address, is_active) VALUES (?, ?, ?, ?, TRUE)", [input.customer.name, input.customer.phone, input.customer.email ?? null, input.customer.address ?? null]);
+        customerId = customer.insertId; customerName = input.customer.name;
+      }
+      await createPartyCoa("customer", Number(customerId), customerName!, connection);
     }
     const calculatedItems: Array<{ productId: number; sizeId: number | null; colorId: number | null; quantity: number; price: number; discount: number; lineTotal: number }> = [];
     for (const item of input.items) {
@@ -112,13 +134,13 @@ posSalesRouter.post("/", asyncHandler(async (req, res) => {
     const grandTotal = Number((totalAmount - input.discount).toFixed(2));
     if (input.paidAmount > grandTotal) throw new HttpError(400, "Paid amount cannot exceed grand total");
     const dueAmount = Number((grandTotal - input.paidAmount).toFixed(2));
-    if (dueAmount > 0 && !input.customerId) throw new HttpError(400, "customerId is required when a POS sale has due amount");
+    if (dueAmount > 0 && !customerId) throw new HttpError(400, "customerId or customer details are required when a POS sale has due amount");
     const verifyAmount = (provided: number | undefined, calculated: number, name: string) => { if (provided !== undefined && Math.abs(provided - calculated) > 0.009) throw new HttpError(400, `${name} must match the calculated amount (${calculated})`); };
     verifyAmount(input.totalAmount, totalAmount, "totalAmount"); verifyAmount(input.grandTotal, grandTotal, "grandTotal"); verifyAmount(input.dueAmount, dueAmount, "dueAmount");
     const [result] = await connection.execute<any>(
       `INSERT INTO pos_sales (sale_number, warehouse_id, customer_id, sale_date, payment_method, note, subtotal, discount, total_amount, grand_total, paid_amount, due_amount, change_amount, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'completed')`,
-      [saleNumber(), input.warehouseId, input.customerId ?? null, saleDate, input.paymentMethod, input.note ?? null, totalAmount, input.discount, totalAmount, grandTotal, input.paidAmount, dueAmount],
+      [saleNumber(), input.warehouseId, customerId, saleDate, input.paymentMethod, input.note ?? null, totalAmount, input.discount, totalAmount, grandTotal, input.paidAmount, dueAmount],
     );
     for (const item of calculatedItems) {
       const [stock] = await connection.execute<any>(
@@ -134,9 +156,9 @@ posSalesRouter.post("/", asyncHandler(async (req, res) => {
     const [costRows] = await connection.execute<any[]>("SELECT COALESCE(SUM(psi.quantity * p.buying_price), 0) AS cost FROM pos_sale_items psi JOIN products p ON p.id = psi.product_id WHERE psi.pos_sale_id = ?", [result.insertId]);
     const cost = Number(costRows[0].cost);
     const saleLines: Array<{ headCode: number; debit?: number; credit?: number }> = [{ headCode: 1000101, debit: input.paidAmount }];
-    if (dueAmount > 0 && input.customerId) { const [customers] = await connection.execute<any[]>("SELECT name FROM customers WHERE id = ?", [input.customerId]); const customerCoa = await createPartyCoa("customer", input.customerId, customers[0].name, connection); saleLines.push({ headCode: Number(customerCoa.HeadCode), debit: dueAmount }); }
+    if (dueAmount > 0 && customerId) { const customerCoa = await createPartyCoa("customer", customerId, customerName!, connection); saleLines.push({ headCode: Number(customerCoa.HeadCode), debit: dueAmount }); }
     saleLines.push({ headCode: 4000101, credit: grandTotal }, { headCode: 5000107, debit: cost }, { headCode: 1000108, credit: cost });
-    await postAccountEntries(connection, { referenceType: "pos_sale", referenceId: result.insertId, date: saleDate, customerId: input.customerId ?? null, description: `POS sale ${result.insertId}`, lines: saleLines });
+    await postAccountEntries(connection, { referenceType: "pos_sale", referenceId: result.insertId, date: saleDate, customerId, description: `POS sale ${result.insertId}`, lines: saleLines });
     await connection.commit();
     res.status(201).json({ success: true, data: await saleDetails(result.insertId, connection) });
   } catch (error) {

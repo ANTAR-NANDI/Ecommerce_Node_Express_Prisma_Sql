@@ -6,7 +6,7 @@ import { asyncHandler } from "../lib/async-handler";
 import { HttpError } from "../lib/http-error";
 import { postAccountEntries } from "../lib/accounting";
 import { createPartyCoa } from "../lib/party-coa";
-import { requireAdmin, requireAuth } from "../middleware/auth";
+import { requireAdmin, requireAuth, requireCustomer } from "../middleware/auth";
 
 export const ecommerceOrdersRouter = Router();
 const id = z.coerce.number().int().positive();
@@ -15,14 +15,8 @@ const orderStatuses = ["pending", "confirmed", "processing", "pickup", "on_the_w
 // "confirm" is accepted from an admin UI, while MySQL stores the clearer value "confirmed".
 const orderStatusInput = z.enum(["pending", "confirm", "confirmed", "approve", "processing", "process", "pickup", "on_the_way", "ship", "delivered", "deliver", "cancelled", "cancel"]).transform(value => ({ confirm: "confirmed", approve: "confirmed", process: "processing", ship: "on_the_way", deliver: "delivered", cancel: "cancelled" } as Record<string, string>)[value] ?? value as typeof orderStatuses[number]);
 const paymentStatusInput = z.enum(["pending", "unpaid", "paid", "failed", "refunded"]).transform(value => value === "unpaid" ? "pending" : value);
-const customerInput = z.object({
-  name: z.string().trim().min(2).max(150),
-  phone: z.string().trim().min(6).max(30),
-  email: z.preprocess(value => value === "" ? null : value, z.string().email().nullable().optional()),
-  address: z.string().trim().min(5).max(2000),
-});
 const orderInput = z.object({
-  customer: customerInput,
+  shippingAddress: z.string().trim().min(5).max(2000),
   paymentMethod: z.enum(["cod", "cash", "card", "mobile_banking", "bank_transfer", "transfer", "cheque"]),
   discount: money.optional().default(0),
   // These values are accepted for a clear frontend/Postman payload, then checked
@@ -82,7 +76,7 @@ async function allocateWarehouseStock(connection: any, order: any, warehouseId: 
 }
 
 // Public: called by the shop frontend during checkout. It creates or reuses a customer by phone number.
-ecommerceOrdersRouter.post("/", asyncHandler(async (req, res) => {
+ecommerceOrdersRouter.post("/", requireAuth, requireCustomer, asyncHandler(async (req, res) => {
   const input = orderInput.parse(req.body);
   const connection = await db.getConnection();
   try {
@@ -118,18 +112,12 @@ ecommerceOrdersRouter.post("/", asyncHandler(async (req, res) => {
     verifyAmount(input.totalAmount, totalAmount, "totalAmount");
     verifyAmount(input.grandTotal, grandTotal, "grandTotal");
     verifyAmount(input.dueAmount, dueAmount, "dueAmount");
-    const [existingCustomer] = await connection.execute<any[]>("SELECT id FROM customers WHERE phone = ?", [input.customer.phone]);
-    let customerId: number;
-    if (existingCustomer[0]) {
-      customerId = existingCustomer[0].id;
-      await connection.execute("UPDATE customers SET name = ?, email = ?, address = ? WHERE id = ?", [input.customer.name, input.customer.email ?? null, input.customer.address, customerId]);
-    } else {
-      const [customer] = await connection.execute<any>("INSERT INTO customers (name, phone, email, address, is_active) VALUES (?, ?, ?, ?, TRUE)", [input.customer.name, input.customer.phone, input.customer.email ?? null, input.customer.address]);
-      customerId = customer.insertId;
-      await createPartyCoa("customer", customerId, input.customer.name, connection);
-    }
+    const customerId = req.user!.userId;
+    const [customers] = await connection.execute<any[]>("SELECT id, name FROM customers WHERE id = ? AND is_active = TRUE", [customerId]);
+    if (!customers[0]) throw new HttpError(401, "Authenticated customer was not found or is inactive");
+    await createPartyCoa("customer", customerId, customers[0].name, connection);
     const [result] = await connection.execute<any>(`INSERT INTO ecommerce_orders (order_number, warehouse_id, customer_id, order_date, payment_method, payment_status, shipping_address, note, subtotal, discount, shipping_cost, total_amount, grand_total, paid_amount, due_amount, status)
-      VALUES (?, NULL, ?, NOW(), ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending')`, [orderNumber(), customerId, input.paymentMethod, dueAmount === 0 ? "paid" : "pending", input.customer.address, input.note ?? null, totalAmount, input.discount, totalAmount, grandTotal, input.paidAmount, dueAmount]);
+      VALUES (?, NULL, ?, NOW(), ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending')`, [orderNumber(), customerId, input.paymentMethod, dueAmount === 0 ? "paid" : "pending", input.shippingAddress, input.note ?? null, totalAmount, input.discount, totalAmount, grandTotal, input.paidAmount, dueAmount]);
     for (const item of items) {
       await connection.execute("INSERT INTO ecommerce_order_items (ecommerce_order_id, product_id, size_id, color_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.sizeId, item.colorId, item.quantity, item.unitPrice, item.discount, item.lineTotal]);
     }
