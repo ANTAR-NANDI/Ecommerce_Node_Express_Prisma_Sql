@@ -72,9 +72,11 @@ const supplierPaymentInput = z.object({
   remarks: z.string().trim().min(1).max(1000),
   amount: z.coerce.number().positive(),
   payment_method_id: z.coerce.number().int().min(1).max(3),
-  account_id: id,
+  account_id: id.optional(),
   cheque_number: z.preprocess(value => value === "" ? null : value, z.string().trim().max(100).nullable().optional()),
 }).superRefine((input, ctx) => {
+  if (input.payment_method_id === 2 && !input.account_id) ctx.addIssue({ code: "custom", path: ["account_id"], message: "account_id is required for bank transfer" });
+  if (input.payment_method_id !== 2 && input.account_id) ctx.addIssue({ code: "custom", path: ["account_id"], message: "account_id is only allowed for bank transfer; select the bank when passing a cheque" });
   if (input.payment_method_id === 3 && !input.cheque_number) ctx.addIssue({ code: "custom", path: ["cheque_number"], message: "cheque_number is required for cheque payments" });
   if (input.payment_method_id !== 3 && input.cheque_number) ctx.addIssue({ code: "custom", path: ["cheque_number"], message: "cheque_number is only allowed for cheque payments" });
 });
@@ -85,9 +87,11 @@ const customerPaymentInput = z.object({
   remarks: z.string().trim().min(1).max(1000),
   amount: z.coerce.number().positive(),
   payment_method_id: z.coerce.number().int().min(1).max(3),
-  account_id: id,
+  account_id: id.optional(),
   cheque_number: z.preprocess(value => value === "" ? null : value, z.string().trim().max(100).nullable().optional()),
 }).superRefine((input, ctx) => {
+  if (input.payment_method_id === 2 && !input.account_id) ctx.addIssue({ code: "custom", path: ["account_id"], message: "account_id is required for bank transfer" });
+  if (input.payment_method_id !== 2 && input.account_id) ctx.addIssue({ code: "custom", path: ["account_id"], message: "account_id is only allowed for bank transfer; select the bank when passing a cheque" });
   if (input.payment_method_id === 3 && !input.cheque_number) ctx.addIssue({ code: "custom", path: ["cheque_number"], message: "cheque_number is required for cheque payments" });
   if (input.payment_method_id !== 3 && input.cheque_number) ctx.addIssue({ code: "custom", path: ["cheque_number"], message: "cheque_number is only allowed for cheque payments" });
 });
@@ -121,6 +125,40 @@ const paymentMethodName: Record<number, "cash" | "bank_transfer" | "cheque"> = {
 const paymentNo = (prefix: string) => `${prefix}-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 const bankInput = z.object({ name: z.string().trim().min(2).max(150), accountName: z.string().trim().min(2).max(150), accountNumber: z.string().trim().min(2).max(100), branch: z.string().trim().max(150).nullable().optional(), routingNumber: z.string().trim().max(100).nullable().optional(), isActive: z.boolean().optional() });
 const bankSelect = "SELECT id, name, account_name AS accountName, account_number AS accountNumber, branch, routing_number AS routingNumber, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt FROM banks";
+const accountingTransactionSelect = `SELECT at.id, at.transaction_no AS transactionNumber, at.transaction_date AS date,
+  coa.id AS accountId, at.head_code AS headCode, coa.HeadName AS accountName,
+  at.debit, at.credit, at.description
+  FROM account_transactions at
+  JOIN account_coa coa ON coa.HeadCode = at.head_code`;
+const supplierPaymentSelect = `SELECT sp.id, sp.payment_number AS paymentNumber, sp.supplier_id AS supplierId,
+  s.name AS supplierName, sp.purchase_id AS purchaseId, sp.payment_date AS date, sp.amount,
+  sp.payment_method AS paymentMethod, sp.payment_method_id AS paymentMethodId,
+  sp.account_id AS accountId, coa.HeadCode AS accountHeadCode, coa.HeadName AS accountName,
+  sp.cheque_id AS chequeId, c.cheque_number AS chequeNumber,
+  CASE WHEN sp.cheque_id IS NULL THEN 'posted' ELSE (
+    SELECT cs.status FROM cheque_statuses cs WHERE cs.cheque_id = sp.cheque_id ORDER BY cs.id DESC LIMIT 1
+  ) END AS status, sp.note AS remarks, sp.created_at AS createdAt
+  FROM supplier_payments sp
+  JOIN suppliers s ON s.id = sp.supplier_id
+  LEFT JOIN account_coa coa ON coa.id = sp.account_id
+  LEFT JOIN cheques c ON c.id = sp.cheque_id`;
+
+accountsRouter.get("/payment-methods", (_req, res) => {
+  res.json({ success: true, data: [
+    { id: 1, key: "cash", name: "Cash", requiresBankAccount: false, requiresChequeNumber: false, requiresApproval: false },
+    { id: 2, key: "bank_transfer", name: "Transfer", requiresBankAccount: true, requiresChequeNumber: false, requiresApproval: false },
+    { id: 3, key: "cheque", name: "Cheque", requiresBankAccount: false, requiresChequeNumber: true, requiresApproval: true, selectBankOnApproval: true },
+  ] });
+});
+
+accountsRouter.get("/payment-accounts", asyncHandler(async (req, res) => {
+  const method = z.enum(["cash", "transfer", "cheque"]).parse(req.query.method);
+  const condition = method === "cash" ? "coa.HeadCode = 1000101" : "coa.bank_id IS NOT NULL";
+  const [rows] = await db.query<any[]>(`SELECT coa.id AS accountId, coa.HeadCode AS headCode,
+    coa.HeadName AS accountName, coa.bank_id AS bankId
+    FROM account_coa coa WHERE coa.IsActive = TRUE AND ${condition} ORDER BY coa.HeadName`);
+  res.json({ success: true, data: rows });
+}));
 
 accountsRouter.get("/banks", asyncHandler(async (_req, res) => { const [rows] = await db.query<any[]>(`${bankSelect} ORDER BY name`); res.json({ success: true, data: rows }); }));
 accountsRouter.post("/banks", asyncHandler(async (req, res) => { const input = bankInput.parse(req.body); const connection = await db.getConnection(); try { await connection.beginTransaction(); const [parents] = await connection.execute<any[]>("SELECT id FROM account_coa WHERE HeadCode = 1000102", []); if (!parents[0]) throw new HttpError(400, "Cash at Bank COA head (1000102) is missing"); const [result] = await connection.execute<any>("INSERT INTO banks (name, account_name, account_number, branch, routing_number, is_active) VALUES (?, ?, ?, ?, ?, ?)", [input.name, input.accountName, input.accountNumber, input.branch ?? null, input.routingNumber ?? null, input.isActive ?? true]); const [last] = await connection.execute<any[]>("SELECT HeadCode FROM account_coa WHERE parent_id = ? ORDER BY HeadCode DESC LIMIT 1", [parents[0].id]); const headCode = last[0] ? Number(last[0].HeadCode) + 1 : 100010201; await connection.execute("INSERT INTO account_coa (HeadCode, HeadName, PHeadName, parent_id, HeadLevel, IsActive, IsTransaction, IsGL, IsJournal, HeadType, node_type, allows_manual_children, bank_id, CreateBy, CreateDate) VALUES (?, ?, 'Cash at Bank', ?, 4, ?, TRUE, FALSE, TRUE, 'A', 'ledger', FALSE, ?, 'System', CURDATE())", [headCode, `${result.insertId}-${input.name}`, parents[0].id, input.isActive ?? true, String(result.insertId)]); const [rows] = await connection.execute<any[]>(`${bankSelect} WHERE id = ?`, [result.insertId]); await connection.commit(); res.status(201).json({ success: true, data: rows[0] }); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); } }));
@@ -133,30 +171,73 @@ accountsRouter.post("/supplier-payments", asyncHandler(async (req, res) => {
   try {
     await connection.beginTransaction();
     const [purchases] = await connection.execute<any[]>("SELECT p.total_amount AS totalAmount, p.paid_amount AS paidAmount, s.name AS supplierName FROM purchases p JOIN suppliers s ON s.id = p.supplier_id WHERE p.id = ? AND p.supplier_id = ? AND p.status = 'received'", [input.purchase_id, input.supplier_id]);
-    const purchase = purchases[0]; if (!purchase) throw new HttpError(400, "Purchase not found for this supplier"); if (Number(purchase.paidAmount) + input.amount > Number(purchase.totalAmount)) throw new HttpError(400, "Payment amount exceeds the remaining purchase balance");
-    const [accounts] = await connection.execute<any[]>("SELECT id, HeadCode, bank_id AS bankId FROM account_coa WHERE id = ? AND IsActive = TRUE", [input.account_id]); const account = accounts[0]; if (!account) throw new HttpError(404, "Active account not found");
-    if (method === "cash" && Number(account.HeadCode) !== 1000101) throw new HttpError(400, "Cash payment requires the Cash in Hand account");
-    if (method !== "cash" && !account.bankId) throw new HttpError(400, "Bank transfer and cheque payments require a bank account");
+    const purchase = purchases[0]; if (!purchase) throw new HttpError(400, "Purchase not found for this supplier");
+    const [pending] = await connection.execute<any[]>("SELECT COALESCE(SUM(sp.amount), 0) AS total FROM supplier_payments sp JOIN cheque_statuses cs ON cs.id = (SELECT id FROM cheque_statuses WHERE cheque_id = sp.cheque_id ORDER BY id DESC LIMIT 1) WHERE sp.purchase_id = ? AND cs.status = 'pending'", [input.purchase_id]);
+    if (Number(purchase.paidAmount) + Number(pending[0].total) + input.amount > Number(purchase.totalAmount)) throw new HttpError(400, "Payment amount exceeds the remaining purchase balance, including pending cheques");
+    let account: any = null;
+    if (method === "cash") { const [accounts] = await connection.execute<any[]>("SELECT id, HeadCode, bank_id AS bankId FROM account_coa WHERE HeadCode = 1000101 AND IsActive = TRUE"); account = accounts[0]; if (!account) throw new HttpError(400, "Active Cash in Hand COA (1000101) is missing"); }
+    if (method === "bank_transfer") { const [accounts] = await connection.execute<any[]>("SELECT id, HeadCode, bank_id AS bankId FROM account_coa WHERE id = ? AND IsActive = TRUE AND bank_id IS NOT NULL", [input.account_id!]); account = accounts[0]; if (!account) throw new HttpError(400, "Active bank account not found"); }
     let chequeId: number | null = null;
-    if (method === "cheque") { const [cheque] = await connection.query<any>("INSERT INTO cheques (cheque_number, cheque_type, amount, account_id, issued_date) VALUES (?, 'issued', ?, ?, ?)", [input.cheque_number, input.amount, input.account_id, input.date]); chequeId = cheque.insertId; await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date, remarks) VALUES (?, 'pending', ?, ?)", [chequeId, input.date, input.remarks]); }
-    const number = paymentNo("SUPPAY"); const [payment] = await connection.execute<any>("INSERT INTO supplier_payments (payment_number, supplier_id, purchase_id, payment_date, amount, payment_method, payment_method_id, account_id, cheque_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [number, input.supplier_id, input.purchase_id, input.date, input.amount, method, input.payment_method_id, input.account_id, chequeId, input.remarks]);
-    const supplierCoa = await createPartyCoa("supplier", input.supplier_id, purchase.supplierName, connection); const creditHead = method === "cheque" ? 2000105 : Number(account.HeadCode);
-    await postAccountEntries(connection, { referenceType: "supplier_payment", referenceId: payment.insertId, date: input.date, supplierId: input.supplier_id, description: `Supplier payment ${number}`, lines: [{ headCode: Number(supplierCoa.HeadCode), debit: input.amount }, { headCode: creditHead, credit: input.amount }] });
-    await connection.execute("UPDATE purchases SET paid_amount = paid_amount + ? WHERE id = ?", [input.amount, input.purchase_id]);
-    await connection.commit(); res.status(201).json({ success: true, data: { id: payment.insertId, payment_number: number, cheque_id: chequeId } });
+    if (method === "cheque") { const [cheque] = await connection.query<any>("INSERT INTO cheques (cheque_number, cheque_type, amount, account_id, issued_date) VALUES (?, 'issued', ?, NULL, ?)", [input.cheque_number, input.amount, input.date]); chequeId = cheque.insertId; await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date, remarks) VALUES (?, 'pending', ?, ?)", [chequeId, input.date, input.remarks]); }
+    const number = paymentNo("SUPPAY"); const [payment] = await connection.execute<any>("INSERT INTO supplier_payments (payment_number, supplier_id, purchase_id, payment_date, amount, payment_method, payment_method_id, account_id, cheque_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [number, input.supplier_id, input.purchase_id, input.date, input.amount, method, input.payment_method_id, account?.id ?? null, chequeId, input.remarks]);
+    if (method !== "cheque") {
+      const supplierCoa = await createPartyCoa("supplier", input.supplier_id, purchase.supplierName, connection);
+      await postAccountEntries(connection, { referenceType: "supplier_payment", referenceId: payment.insertId, date: input.date, supplierId: input.supplier_id, description: `Supplier payment ${number}`, lines: [{ headCode: Number(supplierCoa.HeadCode), debit: input.amount }, { headCode: Number(account.HeadCode), credit: input.amount }] });
+      await connection.execute("UPDATE purchases SET paid_amount = paid_amount + ? WHERE id = ?", [input.amount, input.purchase_id]);
+    }
+    await connection.commit();
+    const [rows] = await db.execute<any[]>(`${supplierPaymentSelect} WHERE sp.id = ?`, [payment.insertId]);
+    const [transactions] = await db.execute<any[]>(`${accountingTransactionSelect} WHERE at.reference_type = 'supplier_payment' AND at.reference_id = ? ORDER BY at.id`, [payment.insertId]);
+    res.status(201).json({ success: true, data: { ...rows[0], accountingPosted: method !== "cheque", transactions } });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
 
 accountsRouter.post("/supplier-payments/cheques/:chequeId/pass", asyncHandler(async (req, res) => {
-  const chequeId = id.parse(req.params.chequeId); const connection = await db.getConnection();
+  const chequeId = id.parse(req.params.chequeId);
+  const approval = z.object({ account_id: id, date: z.string().date().optional(), remarks: z.string().trim().max(1000).optional() }).parse(req.body ?? {});
+  const connection = await db.getConnection();
   try {
-    await connection.beginTransaction(); const [rows] = await connection.execute<any[]>("SELECT sp.id AS paymentId, sp.supplier_id AS supplierId, sp.amount, c.account_id AS accountId, c.cheque_number AS chequeNumber FROM supplier_payments sp JOIN cheques c ON c.id = sp.cheque_id WHERE c.id = ? FOR UPDATE", [chequeId]); const cheque = rows[0]; if (!cheque) throw new HttpError(404, "Supplier cheque not found"); const [statuses] = await connection.execute<any[]>("SELECT status FROM cheque_statuses WHERE cheque_id = ? ORDER BY id DESC LIMIT 1", [chequeId]); if (statuses[0]?.status !== "pending") throw new HttpError(400, "Only pending cheques can be passed"); const [accounts] = await connection.execute<any[]>("SELECT HeadCode FROM account_coa WHERE id = ? AND IsActive = TRUE", [cheque.accountId]); if (!accounts[0]) throw new HttpError(400, "Cheque bank account is not active"); await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date) VALUES (?, 'passed', CURDATE())", [chequeId]); await postAccountEntries(connection, { referenceType: "supplier_cheque_pass", referenceId: cheque.paymentId, supplierId: cheque.supplierId, description: `Supplier cheque passed ${cheque.chequeNumber}`, lines: [{ headCode: 2000105, debit: Number(cheque.amount) }, { headCode: Number(accounts[0].HeadCode), credit: Number(cheque.amount) }] }); await connection.commit(); res.json({ success: true, data: { cheque_id: chequeId, status: "passed" } });
+    await connection.beginTransaction();
+    const [rows] = await connection.execute<any[]>("SELECT sp.id AS paymentId, sp.supplier_id AS supplierId, sp.purchase_id AS purchaseId, sp.amount, c.account_id AS accountId, c.cheque_number AS chequeNumber, s.name AS supplierName FROM supplier_payments sp JOIN cheques c ON c.id = sp.cheque_id JOIN suppliers s ON s.id = sp.supplier_id WHERE c.id = ? FOR UPDATE", [chequeId]);
+    const cheque = rows[0]; if (!cheque) throw new HttpError(404, "Supplier cheque not found");
+    const [statuses] = await connection.execute<any[]>("SELECT status FROM cheque_statuses WHERE cheque_id = ? ORDER BY id DESC LIMIT 1", [chequeId]); if (statuses[0]?.status !== "pending") throw new HttpError(400, "Only pending cheques can be passed");
+    const selectedAccountId = approval.account_id;
+    const [accounts] = await connection.execute<any[]>("SELECT HeadCode FROM account_coa WHERE id = ? AND IsActive = TRUE AND bank_id IS NOT NULL", [selectedAccountId]); if (!accounts[0]) throw new HttpError(400, "Cheque bank account is not active");
+    const [purchases] = await connection.execute<any[]>("SELECT total_amount AS totalAmount, paid_amount AS paidAmount FROM purchases WHERE id = ? FOR UPDATE", [cheque.purchaseId]); if (!purchases[0] || Number(purchases[0].paidAmount) + Number(cheque.amount) > Number(purchases[0].totalAmount)) throw new HttpError(400, "Cheque amount exceeds the remaining purchase balance");
+    const supplierCoa = await createPartyCoa("supplier", cheque.supplierId, cheque.supplierName, connection);
+    await connection.execute("UPDATE cheques SET account_id = ? WHERE id = ?", [selectedAccountId, chequeId]);
+    await connection.execute("UPDATE supplier_payments SET account_id = ? WHERE id = ?", [selectedAccountId, cheque.paymentId]);
+    await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date, remarks) VALUES (?, 'passed', COALESCE(?, CURDATE()), ?)", [chequeId, approval.date ?? null, approval.remarks ?? null]);
+    await postAccountEntries(connection, { referenceType: "supplier_payment", referenceId: cheque.paymentId, date: approval.date, supplierId: cheque.supplierId, description: `Supplier cheque passed ${cheque.chequeNumber}`, lines: [{ headCode: Number(supplierCoa.HeadCode), debit: Number(cheque.amount) }, { headCode: Number(accounts[0].HeadCode), credit: Number(cheque.amount) }] });
+    await connection.execute("UPDATE purchases SET paid_amount = paid_amount + ? WHERE id = ?", [cheque.amount, cheque.purchaseId]);
+    await connection.commit();
+    const [transactions] = await db.execute<any[]>(`${accountingTransactionSelect} WHERE at.reference_type = 'supplier_payment' AND at.reference_id = ? ORDER BY at.id`, [cheque.paymentId]);
+    res.json({ success: true, data: { chequeId, status: "passed", accountingPosted: true, transactions } });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
 
 accountsRouter.post("/supplier-payments/cheques/:chequeId/withdraw", asyncHandler(async (req, res) => {
   const chequeId = id.parse(req.params.chequeId); const remarks = z.object({ remarks: z.string().trim().max(1000).optional() }).parse(req.body).remarks; const connection = await db.getConnection();
   try { await connection.beginTransaction(); const [payments] = await connection.execute<any[]>("SELECT cheque_id AS chequeId FROM supplier_payments WHERE cheque_id = ? FOR UPDATE", [chequeId]); if (!payments[0]) throw new HttpError(404, "Supplier cheque not found"); const [statuses] = await connection.execute<any[]>("SELECT status FROM cheque_statuses WHERE cheque_id = ? ORDER BY id DESC LIMIT 1", [chequeId]); if (statuses[0]?.status !== "pending") throw new HttpError(400, "Only pending cheques can be withdrawn"); await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date, remarks) VALUES (?, 'withdrawn', CURDATE(), ?)", [chequeId, remarks ?? null]); await connection.commit(); res.json({ success: true, data: { cheque_id: chequeId, status: "withdrawn" } }); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
+
+accountsRouter.get("/supplier-payments", asyncHandler(async (req, res) => {
+  const purchaseId = req.query.purchase_id === undefined ? undefined : id.parse(req.query.purchase_id);
+  const supplierId = req.query.supplier_id === undefined ? undefined : id.parse(req.query.supplier_id);
+  const conditions: string[] = []; const values: number[] = [];
+  if (purchaseId) { conditions.push("sp.purchase_id = ?"); values.push(purchaseId); }
+  if (supplierId) { conditions.push("sp.supplier_id = ?"); values.push(supplierId); }
+  const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+  const [rows] = await db.execute<any[]>(`${supplierPaymentSelect}${where} ORDER BY sp.id DESC`, values);
+  res.json({ success: true, data: rows });
+}));
+
+accountsRouter.get("/supplier-payments/:id", asyncHandler(async (req, res) => {
+  const paymentId = id.parse(req.params.id);
+  const [rows] = await db.execute<any[]>(`${supplierPaymentSelect} WHERE sp.id = ?`, [paymentId]);
+  if (!rows[0]) throw new HttpError(404, "Supplier payment not found");
+  const [transactions] = await db.execute<any[]>(`${accountingTransactionSelect} WHERE at.reference_type = 'supplier_payment' AND at.reference_id = ? ORDER BY at.id`, [paymentId]);
+  res.json({ success: true, data: { ...rows[0], accountingPosted: transactions.length > 0, transactions } });
 }));
 
 accountsRouter.post("/customer-payments", asyncHandler(async (req, res) => {
@@ -167,22 +248,39 @@ accountsRouter.post("/customer-payments", asyncHandler(async (req, res) => {
     const order = orders[0]; if (!order) throw new HttpError(400, "Order not found for this customer");
     const [received] = await connection.execute<any[]>("SELECT COALESCE(SUM(cp.amount), 0) AS total FROM customer_payments cp LEFT JOIN cheques c ON c.id = cp.cheque_id LEFT JOIN cheque_statuses cs ON cs.id = (SELECT id FROM cheque_statuses WHERE cheque_id = c.id ORDER BY id DESC LIMIT 1) WHERE cp.order_id = ? AND (cp.cheque_id IS NULL OR cs.status = 'passed')", [input.order_id]);
     const effectiveAmount = method === "cheque" ? 0 : input.amount; if (Number(received[0].total) + effectiveAmount > Number(order.totalAmount)) throw new HttpError(400, "Payment amount exceeds the remaining order balance");
-    const [accounts] = await connection.execute<any[]>("SELECT id, HeadCode, bank_id AS bankId FROM account_coa WHERE id = ? AND IsActive = TRUE", [input.account_id]); const account = accounts[0]; if (!account) throw new HttpError(404, "Active account not found");
-    if (method === "cash" && Number(account.HeadCode) !== 1000101) throw new HttpError(400, "Cash payment requires the Cash in Hand account");
-    if (method !== "cash" && !account.bankId) throw new HttpError(400, "Bank transfer and cheque payments require a bank account");
+    let account: any = null;
+    if (method === "cash") { const [accounts] = await connection.execute<any[]>("SELECT id, HeadCode, bank_id AS bankId FROM account_coa WHERE HeadCode = 1000101 AND IsActive = TRUE"); account = accounts[0]; if (!account) throw new HttpError(400, "Active Cash in Hand COA (1000101) is missing"); }
+    if (method === "bank_transfer") { const [accounts] = await connection.execute<any[]>("SELECT id, HeadCode, bank_id AS bankId FROM account_coa WHERE id = ? AND IsActive = TRUE AND bank_id IS NOT NULL", [input.account_id!]); account = accounts[0]; if (!account) throw new HttpError(400, "Active bank account not found"); }
     let chequeId: number | null = null;
-    if (method === "cheque") { const [cheque] = await connection.query<any>("INSERT INTO cheques (cheque_number, cheque_type, amount, account_id, issued_date) VALUES (?, 'received', ?, ?, ?)", [input.cheque_number, input.amount, input.account_id, input.date]); chequeId = cheque.insertId; await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date, remarks) VALUES (?, 'pending', ?, ?)", [chequeId, input.date, input.remarks]); }
-    const number = paymentNo("CUSTREC"); const [payment] = await connection.execute<any>("INSERT INTO customer_payments (payment_number, customer_id, order_id, payment_date, amount, payment_method, payment_method_id, account_id, cheque_id, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [number, input.customer_id, input.order_id, input.date, input.amount, method, input.payment_method_id, input.account_id, chequeId, input.remarks]);
-    const customerCoa = await createPartyCoa("customer", input.customer_id, order.customerName, connection); const debitHead = method === "cheque" ? 1000105 : Number(account.HeadCode);
-    await postAccountEntries(connection, { referenceType: "customer_payment", referenceId: payment.insertId, date: input.date, customerId: input.customer_id, description: `Customer receipt ${number}`, lines: [{ headCode: debitHead, debit: input.amount }, { headCode: Number(customerCoa.HeadCode), credit: input.amount }] });
+    if (method === "cheque") { const [cheque] = await connection.query<any>("INSERT INTO cheques (cheque_number, cheque_type, amount, account_id, issued_date) VALUES (?, 'received', ?, NULL, ?)", [input.cheque_number, input.amount, input.date]); chequeId = cheque.insertId; await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date, remarks) VALUES (?, 'pending', ?, ?)", [chequeId, input.date, input.remarks]); }
+    const number = paymentNo("CUSTREC"); const [payment] = await connection.execute<any>("INSERT INTO customer_payments (payment_number, customer_id, order_id, payment_date, amount, payment_method, payment_method_id, account_id, cheque_id, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [number, input.customer_id, input.order_id, input.date, input.amount, method, input.payment_method_id, account?.id ?? null, chequeId, input.remarks]);
+    if (method !== "cheque") { const customerCoa = await createPartyCoa("customer", input.customer_id, order.customerName, connection); await postAccountEntries(connection, { referenceType: "customer_payment", referenceId: payment.insertId, date: input.date, customerId: input.customer_id, description: `Customer receipt ${number}`, lines: [{ headCode: Number(account.HeadCode), debit: input.amount }, { headCode: Number(customerCoa.HeadCode), credit: input.amount }] }); }
     if (Number(received[0].total) + effectiveAmount === Number(order.totalAmount)) await connection.execute("UPDATE ecommerce_orders SET payment_status = 'paid' WHERE id = ?", [input.order_id]);
     await connection.commit(); res.status(201).json({ success: true, data: { id: payment.insertId, payment_number: number, cheque_id: chequeId } });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
 
 accountsRouter.post("/customer-payments/cheques/:chequeId/pass", asyncHandler(async (req, res) => {
-  const chequeId = id.parse(req.params.chequeId); const connection = await db.getConnection();
-  try { await connection.beginTransaction(); const [rows] = await connection.execute<any[]>("SELECT cp.id AS paymentId, cp.customer_id AS customerId, cp.order_id AS orderId, cp.amount, c.account_id AS accountId, c.cheque_number AS chequeNumber FROM customer_payments cp JOIN cheques c ON c.id = cp.cheque_id WHERE c.id = ? FOR UPDATE", [chequeId]); const cheque = rows[0]; if (!cheque) throw new HttpError(404, "Customer cheque not found"); const [statuses] = await connection.execute<any[]>("SELECT status FROM cheque_statuses WHERE cheque_id = ? ORDER BY id DESC LIMIT 1", [chequeId]); if (statuses[0]?.status !== "pending") throw new HttpError(400, "Only pending cheques can be passed"); const [accounts] = await connection.execute<any[]>("SELECT HeadCode FROM account_coa WHERE id = ? AND IsActive = TRUE", [cheque.accountId]); if (!accounts[0]) throw new HttpError(400, "Cheque bank account is not active"); await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date) VALUES (?, 'passed', CURDATE())", [chequeId]); await postAccountEntries(connection, { referenceType: "customer_cheque_pass", referenceId: cheque.paymentId, customerId: cheque.customerId, description: `Customer cheque passed ${cheque.chequeNumber}`, lines: [{ headCode: Number(accounts[0].HeadCode), debit: Number(cheque.amount) }, { headCode: 1000105, credit: Number(cheque.amount) }] }); const [totals] = await connection.execute<any[]>("SELECT COALESCE(SUM(cp.amount), 0) AS total FROM customer_payments cp LEFT JOIN cheques c ON c.id = cp.cheque_id LEFT JOIN cheque_statuses cs ON cs.id = (SELECT id FROM cheque_statuses WHERE cheque_id = c.id ORDER BY id DESC LIMIT 1) WHERE cp.order_id = ? AND (cp.cheque_id IS NULL OR cs.status = 'passed')", [cheque.orderId]); const [orders] = await connection.execute<any[]>("SELECT grand_total AS totalAmount FROM ecommerce_orders WHERE id = ?", [cheque.orderId]); if (Number(totals[0].total) >= Number(orders[0].totalAmount)) await connection.execute("UPDATE ecommerce_orders SET payment_status = 'paid', paid_amount = grand_total, due_amount = 0 WHERE id = ?", [cheque.orderId]); await connection.commit(); res.json({ success: true, data: { cheque_id: chequeId, status: "passed" } }); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+  const chequeId = id.parse(req.params.chequeId);
+  const approval = z.object({ account_id: id, date: z.string().date().optional(), remarks: z.string().trim().max(1000).optional() }).parse(req.body ?? {});
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute<any[]>("SELECT cp.id AS paymentId, cp.customer_id AS customerId, cp.order_id AS orderId, cp.amount, c.cheque_number AS chequeNumber, cu.name AS customerName FROM customer_payments cp JOIN cheques c ON c.id = cp.cheque_id JOIN customers cu ON cu.id = cp.customer_id WHERE c.id = ? FOR UPDATE", [chequeId]);
+    const cheque = rows[0]; if (!cheque) throw new HttpError(404, "Customer cheque not found");
+    const [statuses] = await connection.execute<any[]>("SELECT status FROM cheque_statuses WHERE cheque_id = ? ORDER BY id DESC LIMIT 1", [chequeId]); if (statuses[0]?.status !== "pending") throw new HttpError(400, "Only pending cheques can be passed");
+    const [accounts] = await connection.execute<any[]>("SELECT HeadCode FROM account_coa WHERE id = ? AND IsActive = TRUE AND bank_id IS NOT NULL", [approval.account_id]); if (!accounts[0]) throw new HttpError(400, "Active bank account not found");
+    const customerCoa = await createPartyCoa("customer", cheque.customerId, cheque.customerName, connection);
+    await connection.execute("UPDATE cheques SET account_id = ? WHERE id = ?", [approval.account_id, chequeId]);
+    await connection.execute("UPDATE customer_payments SET account_id = ? WHERE id = ?", [approval.account_id, cheque.paymentId]);
+    await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date, remarks) VALUES (?, 'passed', COALESCE(?, CURDATE()), ?)", [chequeId, approval.date ?? null, approval.remarks ?? null]);
+    await postAccountEntries(connection, { referenceType: "customer_payment", referenceId: cheque.paymentId, date: approval.date, customerId: cheque.customerId, description: `Customer cheque passed ${cheque.chequeNumber}`, lines: [{ headCode: Number(accounts[0].HeadCode), debit: Number(cheque.amount) }, { headCode: Number(customerCoa.HeadCode), credit: Number(cheque.amount) }] });
+    const [totals] = await connection.execute<any[]>("SELECT COALESCE(SUM(cp.amount), 0) AS total FROM customer_payments cp LEFT JOIN cheques c ON c.id = cp.cheque_id LEFT JOIN cheque_statuses cs ON cs.id = (SELECT id FROM cheque_statuses WHERE cheque_id = c.id ORDER BY id DESC LIMIT 1) WHERE cp.order_id = ? AND (cp.cheque_id IS NULL OR cs.status = 'passed')", [cheque.orderId]);
+    const [orders] = await connection.execute<any[]>("SELECT grand_total AS totalAmount FROM ecommerce_orders WHERE id = ?", [cheque.orderId]);
+    const paidAmount = Number(totals[0].total); const totalAmount = Number(orders[0].totalAmount);
+    await connection.execute("UPDATE ecommerce_orders SET paid_amount = ?, due_amount = GREATEST(grand_total - ?, 0), payment_status = IF(? >= grand_total, 'paid', 'pending') WHERE id = ?", [paidAmount, paidAmount, paidAmount, cheque.orderId]);
+    await connection.commit(); res.json({ success: true, data: { chequeId, status: "passed", accountingPosted: true } });
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
 
 accountsRouter.post("/customer-payments/cheques/:chequeId/withdraw", asyncHandler(async (req, res) => {

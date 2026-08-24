@@ -20,7 +20,17 @@ const purchaseInput = z.object({
   discount: money.optional(),
   shippingCost: money.optional(),
   paidAmount: money.optional(),
+  paymentMethod: z.enum(["cash", "transfer", "cheque"]).optional(),
+  accountId: id.optional(),
+  chequeNumber: z.preprocess(value => value === "" ? undefined : value, z.string().trim().max(100).optional()),
   items: z.array(z.object({ productId: id, quantity: z.coerce.number().int().positive(), unitPrice: money, discount: money.optional() })).min(1).max(100),
+}).superRefine((input, ctx) => {
+  const paidAmount = Number(input.paidAmount ?? 0);
+  if (paidAmount > 0 && !input.paymentMethod) ctx.addIssue({ code: "custom", path: ["paymentMethod"], message: "paymentMethod is required when paidAmount is greater than zero" });
+  if (paidAmount > 0 && input.paymentMethod === "transfer" && !input.accountId) ctx.addIssue({ code: "custom", path: ["accountId"], message: "accountId is required for bank transfer" });
+  if (input.paymentMethod !== "transfer" && input.accountId) ctx.addIssue({ code: "custom", path: ["accountId"], message: "accountId is only allowed for transfer; select the bank when passing a cheque" });
+  if (input.paymentMethod === "cheque" && paidAmount > 0 && !input.chequeNumber) ctx.addIssue({ code: "custom", path: ["chequeNumber"], message: "chequeNumber is required for cheque payments" });
+  if (input.paymentMethod !== "cheque" && input.chequeNumber) ctx.addIssue({ code: "custom", path: ["chequeNumber"], message: "chequeNumber is only allowed for cheque payments" });
 });
 
 const headerSelect = `SELECT p.id, p.purchase_number AS purchaseNumber, p.purchase_date AS purchaseDate,
@@ -70,10 +80,13 @@ purchasesRouter.post("/", requireAuth, requireAdmin, asyncHandler(async (req, re
   const discount = input.discount ?? 0; const shippingCost = input.shippingCost ?? 0; const totalAmount = subtotal - discount + shippingCost;
   if (totalAmount < 0) throw new HttpError(400, "Purchase discount cannot exceed the subtotal plus shipping cost");
   if ((input.paidAmount ?? 0) > totalAmount) throw new HttpError(400, "Paid amount cannot exceed total amount");
+  const requestedPaidAmount = Number(input.paidAmount ?? 0);
+  const postedPaidAmount = input.paymentMethod === "cheque" ? 0 : requestedPaidAmount;
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
-    const [result] = await connection.execute<any>(`INSERT INTO purchases (purchase_number, supplier_id, warehouse_id, purchase_date, invoice_number, notes, subtotal, discount, shipping_cost, total_amount, paid_amount, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received')`, [purchaseNumber(purchaseDate), input.supplierId, input.warehouseId, purchaseDate, input.invoiceNumber ?? null, input.notes ?? null, subtotal, discount, shippingCost, totalAmount, input.paidAmount ?? 0]);
+    const number = purchaseNumber(purchaseDate);
+    const [result] = await connection.execute<any>(`INSERT INTO purchases (purchase_number, supplier_id, warehouse_id, purchase_date, invoice_number, notes, subtotal, discount, shipping_cost, total_amount, paid_amount, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received')`, [number, input.supplierId, input.warehouseId, purchaseDate, input.invoiceNumber ?? null, input.notes ?? null, subtotal, discount, shippingCost, totalAmount, postedPaidAmount]);
     for (const item of items) {
       await connection.execute("INSERT INTO purchase_items (purchase_id, product_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.quantity, item.unitPrice, item.discount, item.lineTotal]);
       await connection.execute("INSERT INTO warehouse_stocks (warehouse_id, product_id, quantity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)", [input.warehouseId, item.productId, item.quantity]);
@@ -81,9 +94,29 @@ purchasesRouter.post("/", requireAuth, requireAdmin, asyncHandler(async (req, re
       await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'purchase', ?, 'purchase', ?, ?)", [input.warehouseId, item.productId, item.quantity, result.insertId, input.invoiceNumber ?? null]);
     }
     const [supplierRows] = await connection.execute<any[]>("SELECT name FROM suppliers WHERE id = ?", [input.supplierId]);
+    if (!supplierRows[0]) throw new HttpError(404, "Supplier not found");
     const supplierCoa = await createPartyCoa("supplier", input.supplierId, supplierRows[0].name, connection);
-    await postAccountEntries(connection, { referenceType: "purchase", referenceId: result.insertId, date: purchaseDate, supplierId: input.supplierId, description: `Purchase ${result.insertId}`, lines: [{ headCode: 1000108, debit: totalAmount }, { headCode: Number(supplierCoa.HeadCode), credit: totalAmount }, ...(input.paidAmount ? [{ headCode: Number(supplierCoa.HeadCode), debit: input.paidAmount }, { headCode: 1000101, credit: input.paidAmount }] : [])] });
-    await connection.commit(); res.status(201).json({ success: true, data: await purchaseDetails(result.insertId, connection) });
+    await postAccountEntries(connection, { referenceType: "purchase", referenceId: result.insertId, date: purchaseDate, supplierId: input.supplierId, description: `Purchase ${number}`, lines: [{ headCode: 1000108, debit: totalAmount }, { headCode: Number(supplierCoa.HeadCode), credit: totalAmount }] });
+
+    let payment: any = null;
+    if (requestedPaidAmount > 0) {
+      let account: any = null;
+      if (input.paymentMethod === "cash") { const [accountRows] = await connection.execute<any[]>("SELECT id, HeadCode, HeadName AS accountName FROM account_coa WHERE HeadCode = 1000101 AND IsActive = TRUE"); account = accountRows[0]; if (!account) throw new HttpError(400, "Active Cash in Hand COA (1000101) is missing"); }
+      if (input.paymentMethod === "transfer") { const [accountRows] = await connection.execute<any[]>("SELECT id, HeadCode, bank_id AS bankId, HeadName AS accountName FROM account_coa WHERE id = ? AND IsActive = TRUE AND bank_id IS NOT NULL", [input.accountId!]); account = accountRows[0]; if (!account) throw new HttpError(400, "Active bank account not found"); }
+      const method = input.paymentMethod === "transfer" ? "bank_transfer" : input.paymentMethod!;
+      const methodId = input.paymentMethod === "cash" ? 1 : input.paymentMethod === "transfer" ? 2 : 3;
+      let chequeId: number | null = null;
+      if (input.paymentMethod === "cheque") {
+        const [cheque] = await connection.execute<any>("INSERT INTO cheques (cheque_number, cheque_type, amount, account_id, issued_date) VALUES (?, 'issued', ?, NULL, ?)", [input.chequeNumber!, requestedPaidAmount, purchaseDate]);
+        chequeId = cheque.insertId;
+        await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date, remarks) VALUES (?, 'pending', ?, ?)", [chequeId, purchaseDate, input.notes ?? null]);
+      }
+      const paymentNumber = `SUPPAY-${purchaseDate.replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+      const [paymentResult] = await connection.execute<any>("INSERT INTO supplier_payments (payment_number, supplier_id, purchase_id, payment_date, amount, payment_method, payment_method_id, account_id, cheque_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [paymentNumber, input.supplierId, result.insertId, purchaseDate, requestedPaidAmount, method, methodId, account?.id ?? null, chequeId, input.notes ?? null]);
+      if (input.paymentMethod !== "cheque") await postAccountEntries(connection, { referenceType: "supplier_payment", referenceId: paymentResult.insertId, date: purchaseDate, supplierId: input.supplierId, description: `Initial payment for purchase ${number}`, lines: [{ headCode: Number(supplierCoa.HeadCode), debit: requestedPaidAmount }, { headCode: Number(account.HeadCode), credit: requestedPaidAmount }] });
+      payment = { id: paymentResult.insertId, paymentNumber, paymentMethod: input.paymentMethod, accountId: account?.id ?? null, accountName: account?.accountName ?? null, chequeId, chequeNumber: input.chequeNumber ?? null, status: input.paymentMethod === "cheque" ? "pending" : "posted", accountingPosted: input.paymentMethod !== "cheque" };
+    }
+    await connection.commit(); res.status(201).json({ success: true, data: { ...(await purchaseDetails(result.insertId, connection)), payment } });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
 
