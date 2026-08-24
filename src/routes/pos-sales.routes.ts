@@ -12,6 +12,7 @@ export const posSalesRouter = Router();
 
 const id = z.coerce.number().int().positive();
 const money = z.coerce.number().min(0);
+const nullableId = z.preprocess(value => value === "" || value === undefined ? null : value, id.nullable());
 const nullableText = z.preprocess(value => value === "" ? null : value, z.string().trim().max(1000).nullable().optional());
 const posCustomerInput = z.object({
   name: z.string().trim().min(2).max(150),
@@ -31,7 +32,7 @@ const saleInput = z.object({
   grandTotal: money.optional(),
   paidAmount: money.optional().default(0),
   dueAmount: money.optional(),
-  items: z.array(z.object({ productId: id, sizeId: id.nullable().optional(), colorId: id.nullable().optional(), quantity: z.coerce.number().int().positive(), price: money, discount: money.optional().default(0) })).min(1).max(100),
+  items: z.array(z.object({ productId: id, sizeId: nullableId.optional(), colorId: nullableId.optional(), quantity: z.coerce.number().int().positive(), price: money, discount: money.optional().default(0) })).min(1).max(100),
 }).superRefine((input, ctx) => {
   if (input.customerId && input.customer) ctx.addIssue({ code: "custom", path: ["customer"], message: "Send either customerId or customer details, not both" });
 });

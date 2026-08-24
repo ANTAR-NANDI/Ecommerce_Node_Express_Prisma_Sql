@@ -11,6 +11,7 @@ import { requireAdmin, requireAuth, requireCustomer } from "../middleware/auth";
 export const ecommerceOrdersRouter = Router();
 const id = z.coerce.number().int().positive();
 const money = z.coerce.number().min(0);
+const nullableId = z.preprocess(value => value === "" || value === undefined ? null : value, id.nullable());
 const orderStatuses = ["pending", "confirmed", "processing", "pickup", "on_the_way", "delivered", "cancelled"] as const;
 // "confirm" is accepted from an admin UI, while MySQL stores the clearer value "confirmed".
 const orderStatusInput = z.enum(["pending", "confirm", "confirmed", "approve", "processing", "process", "pickup", "on_the_way", "ship", "delivered", "deliver", "cancelled", "cancel"]).transform(value => ({ confirm: "confirmed", approve: "confirmed", process: "processing", ship: "on_the_way", deliver: "delivered", cancel: "cancelled" } as Record<string, string>)[value] ?? value as typeof orderStatuses[number]);
@@ -28,8 +29,8 @@ const orderInput = z.object({
   note: z.preprocess(value => value === "" ? null : value, z.string().trim().max(1000).nullable().optional()),
   items: z.array(z.object({
     productId: id,
-    sizeId: id.nullable().optional(),
-    colorId: id.nullable().optional(),
+    sizeId: nullableId.optional(),
+    colorId: nullableId.optional(),
     quantity: z.coerce.number().int().positive(),
     price: money.optional(),
   })).min(1).max(100),
