@@ -31,8 +31,10 @@ suppliersRouter.post("/", requireAuth, requireAdmin, uploadSupplierImage.single(
   await createPartyCoa("supplier", result.insertId, input.name);
   const [rows] = await db.execute<any[]>(`${select} WHERE id = ?`, [result.insertId]); res.status(201).json({ success: true, data: withImageUrl(req, rows[0]) });
 }));
-suppliersRouter.patch("/:id", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
-  const input = supplierInput.partial().parse(req.body); if (!Object.keys(input).length) throw new HttpError(400, "Provide at least one field to update");
+suppliersRouter.patch("/:id", requireAuth, requireAdmin, uploadSupplierImage.single("image"), asyncHandler(async (req, res) => {
+  const updateBody = { ...(req.body ?? {}) };
+  if (req.file) updateBody.image = req.file.filename;
+  const input = supplierInput.partial().parse(updateBody); if (!Object.keys(input).length) throw new HttpError(400, "Provide at least one field to update");
   const names: Record<string, string> = { name: "name", image: "image", phone: "phone", email: "email", address: "address", isActive: "is_active" };
   const fields = Object.entries(input).map(([key, value]) => ({ name: names[key]!, value }));
   const [result] = await db.query<any>(`UPDATE suppliers SET ${fields.map(field => `${field.name} = ?`).join(", ")} WHERE id = ?`, [...fields.map(field => field.value), Number(req.params.id)] as any);

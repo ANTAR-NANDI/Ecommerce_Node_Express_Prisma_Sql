@@ -42,8 +42,10 @@ brandsRouter.post("/", requireAuth, requireAdmin, uploadBrandImage.single("image
   res.status(201).json({ success: true, data: withImageUrl(req, rows[0]) });
 }));
 
-brandsRouter.patch("/:id", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
-  const input = brandInput.partial().parse(req.body);
+brandsRouter.patch("/:id", requireAuth, requireAdmin, uploadBrandImage.single("image"), asyncHandler(async (req, res) => {
+  const updateBody = { ...(req.body ?? {}) };
+  if (req.file) updateBody.image = req.file.filename;
+  const input = brandInput.partial().parse(updateBody);
   if (!Object.keys(input).length) throw new HttpError(400, "Provide at least one field to update");
   const columnNames: Record<string, string> = { name: "name", slug: "slug", image: "logo_url", isActive: "is_active" };
   const fields = Object.entries(input).map(([key, value]) => ({ name: columnNames[key]!, value }));

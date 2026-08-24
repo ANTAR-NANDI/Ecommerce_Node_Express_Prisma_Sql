@@ -56,7 +56,9 @@ customersRouter.post("/", uploadCustomerImage.single("image"), asyncHandler(asyn
 
 customersRouter.patch("/:id", uploadCustomerImage.single("image"), asyncHandler(async (req, res) => {
   const customerId = id.parse(req.params.id);
-  const input = customerInput.partial().parse({ ...req.body, image: req.file?.filename ?? req.body?.image });
+  const updateBody = { ...(req.body ?? {}) };
+  if (req.file) updateBody.image = req.file.filename;
+  const input = customerInput.partial().parse(updateBody);
   if (!Object.keys(input).length) throw new HttpError(400, "Provide at least one field to update");
   const [currentRows] = await db.execute<any[]>("SELECT first_name AS firstName, last_name AS lastName FROM customers WHERE id = ?", [customerId]);
   if (!currentRows[0]) throw new HttpError(404, "Customer not found");

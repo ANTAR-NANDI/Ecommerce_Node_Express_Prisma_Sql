@@ -27,7 +27,12 @@ const categoryInput = z.object({
 const categoryUpload = uploadCategoryImage.fields([{ name: "image", maxCount: 1 }, { name: "banner", maxCount: 1 }]);
 function uploadedCategoryImages(req: any) {
   const files = req.files as Record<string, Express.Multer.File[]> | undefined;
-  return { image: files?.image?.[0]?.filename ?? req.body?.image, banner: files?.banner?.[0]?.filename ?? req.body?.banner };
+  const images: { image?: string; banner?: string } = {};
+  const image = files?.image?.[0]?.filename ?? req.body?.image;
+  const banner = files?.banner?.[0]?.filename ?? req.body?.banner;
+  if (image !== undefined) images.image = image;
+  if (banner !== undefined) images.banner = banner;
+  return images;
 }
 
 categoriesRouter.get("/", asyncHandler(async (req, res) => {
