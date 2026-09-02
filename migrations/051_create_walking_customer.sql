@@ -12,14 +12,11 @@ ON DUPLICATE KEY UPDATE
   is_active = TRUE,
   is_walk_in = TRUE;
 
-SET @walking_customer_id := LAST_INSERT_ID();
 SET @walking_customer_id := 1;
 SET @customer_receivable_parent_id := (SELECT id FROM account_coa WHERE HeadCode = 1000109 LIMIT 1);
-SET @walking_customer_head_code := (
-  SELECT COALESCE(MAX(HeadCode) + 1, 100010901)
-  FROM account_coa
-  WHERE parent_id = @customer_receivable_parent_id
-);
+-- Reserve 100010900 for the system Walking Customer. Normal customer ledgers
+-- created later start at 100010901.
+SET @walking_customer_head_code := 100010900;
 
 INSERT INTO account_coa (
   HeadCode, HeadName, PHeadName, parent_id, HeadLevel, IsActive,
