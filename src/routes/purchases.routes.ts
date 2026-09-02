@@ -17,13 +17,19 @@ const purchaseInput = z.object({
   purchaseDate: z.string().date().optional(),
   invoiceNumber: z.preprocess(value => value === "" ? null : value, z.string().trim().max(100).nullable().optional()),
   notes: z.preprocess(value => value === "" ? null : value, z.string().trim().max(2000).nullable().optional()),
+  purchaseDiscount: money.optional(),
   discount: money.optional(),
   shippingCost: money.optional(),
+  subtotal: money.optional(),
+  itemDiscountTotal: money.optional(),
+  totalAmount: money.optional(),
+  grandTotal: money.optional(),
   paidAmount: money.optional(),
+  dueAmount: money.optional(),
   paymentMethod: z.enum(["cash", "transfer", "cheque"]).optional(),
   accountId: id.optional(),
   chequeNumber: z.preprocess(value => value === "" ? undefined : value, z.string().trim().max(100).optional()),
-  items: z.array(z.object({ productId: id, quantity: z.coerce.number().int().positive(), unitPrice: money, discount: money.optional() })).min(1).max(100),
+  items: z.array(z.object({ productId: id, quantity: z.coerce.number().int().positive(), unitPrice: money, productDiscount: money.optional(), discount: money.optional() })).min(1).max(100),
 }).superRefine((input, ctx) => {
   const paidAmount = Number(input.paidAmount ?? 0);
   if (paidAmount > 0 && !input.paymentMethod) ctx.addIssue({ code: "custom", path: ["paymentMethod"], message: "paymentMethod is required when paidAmount is greater than zero" });
@@ -31,11 +37,15 @@ const purchaseInput = z.object({
   if (input.paymentMethod !== "transfer" && input.accountId) ctx.addIssue({ code: "custom", path: ["accountId"], message: "accountId is only allowed for transfer; select the bank when passing a cheque" });
   if (input.paymentMethod === "cheque" && paidAmount > 0 && !input.chequeNumber) ctx.addIssue({ code: "custom", path: ["chequeNumber"], message: "chequeNumber is required for cheque payments" });
   if (input.paymentMethod !== "cheque" && input.chequeNumber) ctx.addIssue({ code: "custom", path: ["chequeNumber"], message: "chequeNumber is only allowed for cheque payments" });
+  if (input.purchaseDiscount !== undefined && input.discount !== undefined) ctx.addIssue({ code: "custom", path: ["purchaseDiscount"], message: "Send purchaseDiscount only; do not also send the legacy discount field" });
+  input.items.forEach((item, index) => { if (item.productDiscount !== undefined && item.discount !== undefined) ctx.addIssue({ code: "custom", path: ["items", index, "productDiscount"], message: "Send productDiscount only; do not also send the legacy discount field" }); });
 });
 
 const headerSelect = `SELECT p.id, p.purchase_number AS purchaseNumber, p.purchase_date AS purchaseDate,
-  p.invoice_number AS invoiceNumber, p.notes, p.subtotal, p.discount, p.shipping_cost AS shippingCost,
-  p.total_amount AS totalAmount, p.paid_amount AS paidAmount, p.status, p.supplier_id AS supplierId,
+  p.invoice_number AS invoiceNumber, p.notes, p.subtotal, p.item_discount_total AS itemDiscountTotal,
+  p.discount AS purchaseDiscount, p.shipping_cost AS shippingCost, p.total_amount AS totalAmount,
+  p.grand_total AS grandTotal, p.paid_amount AS paidAmount, p.due_amount AS dueAmount,
+  p.status, p.supplier_id AS supplierId,
   s.name AS supplierName, p.warehouse_id AS warehouseId, w.name AS warehouseName, p.created_at AS createdAt
   FROM purchases p JOIN suppliers s ON s.id = p.supplier_id JOIN warehouses w ON w.id = p.warehouse_id`;
 
@@ -43,7 +53,8 @@ async function purchaseDetails(purchaseId: number, connection: any = db) {
   const [headers] = await connection.execute(`${headerSelect} WHERE p.id = ?`, [purchaseId]);
   const purchase = (headers as any[])[0]; if (!purchase) return null;
   const [items] = await connection.execute(`SELECT pi.id, pi.product_id AS productId, pr.name AS productName, pr.sku,
-    pi.quantity, pi.unit_price AS unitPrice, pi.discount, pi.line_total AS lineTotal
+    pi.quantity, pi.unit_price AS unitPrice, (pi.quantity * pi.unit_price) AS itemSubtotal,
+    pi.discount AS productDiscount, pi.line_total AS lineTotal
     FROM purchase_items pi JOIN products pr ON pr.id = pi.product_id WHERE pi.purchase_id = ? ORDER BY pi.id`, [purchaseId]);
   return { ...purchase, items };
 }
@@ -72,23 +83,36 @@ purchasesRouter.post("/", requireAuth, requireAdmin, asyncHandler(async (req, re
   const input = purchaseInput.parse(req.body);
   const purchaseDate = input.purchaseDate ?? new Date().toISOString().slice(0, 10);
   const items = input.items.map(item => {
-    const discount = item.discount ?? 0; const lineTotal = item.quantity * item.unitPrice - discount;
-    if (lineTotal < 0) throw new HttpError(400, "An item discount cannot exceed its item total");
-    return { ...item, discount, lineTotal };
+    const itemSubtotal = Number((item.quantity * item.unitPrice).toFixed(2));
+    const productDiscount = Number(item.productDiscount ?? item.discount ?? 0);
+    const lineTotal = Number((itemSubtotal - productDiscount).toFixed(2));
+    if (lineTotal < 0) throw new HttpError(400, `Product discount cannot exceed item subtotal for product ID ${item.productId}`);
+    return { ...item, itemSubtotal, productDiscount, lineTotal };
   });
-  const subtotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
-  const discount = input.discount ?? 0; const shippingCost = input.shippingCost ?? 0; const totalAmount = subtotal - discount + shippingCost;
-  if (totalAmount < 0) throw new HttpError(400, "Purchase discount cannot exceed the subtotal plus shipping cost");
-  if ((input.paidAmount ?? 0) > totalAmount) throw new HttpError(400, "Paid amount cannot exceed total amount");
+  const subtotal = Number(items.reduce((sum, item) => sum + item.itemSubtotal, 0).toFixed(2));
+  const itemDiscountTotal = Number(items.reduce((sum, item) => sum + item.productDiscount, 0).toFixed(2));
+  const totalAmount = Number((subtotal - itemDiscountTotal).toFixed(2));
+  const purchaseDiscount = Number(input.purchaseDiscount ?? input.discount ?? 0);
+  const shippingCost = Number(input.shippingCost ?? 0);
+  if (purchaseDiscount > totalAmount) throw new HttpError(400, "Purchase discount cannot exceed total amount after product discounts");
+  const grandTotal = Number((totalAmount - purchaseDiscount + shippingCost).toFixed(2));
+  if ((input.paidAmount ?? 0) > grandTotal) throw new HttpError(400, "Paid amount cannot exceed grand total");
   const requestedPaidAmount = Number(input.paidAmount ?? 0);
   const postedPaidAmount = input.paymentMethod === "cheque" ? 0 : requestedPaidAmount;
+  const dueAmount = Number((grandTotal - postedPaidAmount).toFixed(2));
+  const verifyAmount = (provided: number | undefined, calculated: number, field: string) => { if (provided !== undefined && Math.abs(provided - calculated) > 0.009) throw new HttpError(400, `${field} must match the backend-calculated amount (${calculated})`); };
+  verifyAmount(input.subtotal, subtotal, "subtotal");
+  verifyAmount(input.itemDiscountTotal, itemDiscountTotal, "itemDiscountTotal");
+  verifyAmount(input.totalAmount, totalAmount, "totalAmount");
+  verifyAmount(input.grandTotal, grandTotal, "grandTotal");
+  verifyAmount(input.dueAmount, dueAmount, "dueAmount");
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
     const number = purchaseNumber(purchaseDate);
-    const [result] = await connection.execute<any>(`INSERT INTO purchases (purchase_number, supplier_id, warehouse_id, purchase_date, invoice_number, notes, subtotal, discount, shipping_cost, total_amount, paid_amount, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received')`, [number, input.supplierId, input.warehouseId, purchaseDate, input.invoiceNumber ?? null, input.notes ?? null, subtotal, discount, shippingCost, totalAmount, postedPaidAmount]);
+    const [result] = await connection.execute<any>(`INSERT INTO purchases (purchase_number, supplier_id, warehouse_id, purchase_date, invoice_number, notes, subtotal, item_discount_total, discount, shipping_cost, total_amount, grand_total, paid_amount, due_amount, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received')`, [number, input.supplierId, input.warehouseId, purchaseDate, input.invoiceNumber ?? null, input.notes ?? null, subtotal, itemDiscountTotal, purchaseDiscount, shippingCost, totalAmount, grandTotal, postedPaidAmount, dueAmount]);
     for (const item of items) {
-      await connection.execute("INSERT INTO purchase_items (purchase_id, product_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.quantity, item.unitPrice, item.discount, item.lineTotal]);
+      await connection.execute("INSERT INTO purchase_items (purchase_id, product_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?)", [result.insertId, item.productId, item.quantity, item.unitPrice, item.productDiscount, item.lineTotal]);
       await connection.execute("INSERT INTO warehouse_stocks (warehouse_id, product_id, quantity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)", [input.warehouseId, item.productId, item.quantity]);
       await connection.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", [item.quantity, item.productId]);
       await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'purchase', ?, 'purchase', ?, ?)", [input.warehouseId, item.productId, item.quantity, result.insertId, input.invoiceNumber ?? null]);
@@ -96,7 +120,7 @@ purchasesRouter.post("/", requireAuth, requireAdmin, asyncHandler(async (req, re
     const [supplierRows] = await connection.execute<any[]>("SELECT name FROM suppliers WHERE id = ?", [input.supplierId]);
     if (!supplierRows[0]) throw new HttpError(404, "Supplier not found");
     const supplierCoa = await createPartyCoa("supplier", input.supplierId, supplierRows[0].name, connection);
-    await postAccountEntries(connection, { referenceType: "purchase", referenceId: result.insertId, date: purchaseDate, supplierId: input.supplierId, description: `Purchase ${number}`, lines: [{ headCode: 1000108, debit: totalAmount }, { headCode: Number(supplierCoa.HeadCode), credit: totalAmount }] });
+    await postAccountEntries(connection, { referenceType: "purchase", referenceId: result.insertId, date: purchaseDate, supplierId: input.supplierId, description: `Purchase ${number}`, lines: [{ headCode: 1000108, debit: grandTotal }, { headCode: Number(supplierCoa.HeadCode), credit: grandTotal }] });
 
     let payment: any = null;
     if (requestedPaidAmount > 0) {

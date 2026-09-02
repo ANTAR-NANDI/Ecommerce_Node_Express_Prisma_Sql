@@ -21,6 +21,7 @@ const posCustomerInput = z.object({
   address: z.preprocess(value => value === "" ? null : value, z.string().trim().max(2000).nullable().optional()),
 });
 const saleInput = z.object({
+  draftId: id.optional(),
   warehouseId: id,
   customerId: z.preprocess(value => value === "" ? null : value, id.nullable().optional()),
   customer: posCustomerInput.optional(),
@@ -35,6 +36,17 @@ const saleInput = z.object({
   items: z.array(z.object({ productId: id, sizeId: nullableId.optional(), colorId: nullableId.optional(), quantity: z.coerce.number().int().positive(), price: money, discount: money.optional().default(0) })).min(1).max(100),
 }).superRefine((input, ctx) => {
   if (input.customerId && input.customer) ctx.addIssue({ code: "custom", path: ["customer"], message: "Send either customerId or customer details, not both" });
+});
+
+const draftInput = z.object({
+  warehouseId: id,
+  customerId: z.preprocess(value => value === "" || value === undefined || value === null ? 1 : value, id),
+  saleDate: z.string().trim().min(10).max(40).optional(),
+  paymentMethod: z.enum(["cash", "card", "mobile_banking", "bank_transfer", "transfer", "cheque"]).optional().default("cash"),
+  note: nullableText,
+  discount: money.optional().default(0),
+  paidAmount: money.optional().default(0),
+  items: z.array(z.object({ productId: id, sizeId: nullableId.optional(), colorId: nullableId.optional(), quantity: z.coerce.number().int().positive(), price: money, discount: money.optional().default(0) })).min(1).max(100),
 });
 
 const headerSelect = `SELECT ps.id, ps.sale_number AS saleNumber, ps.warehouse_id AS warehouseId,
@@ -66,6 +78,62 @@ async function saleDetails(saleId: number, connection: any = db) {
   return { ...sale, items };
 }
 
+async function draftDetails(draftId: number, connection: any = db) {
+  const [headers] = await connection.execute(
+    `SELECT pd.id, pd.warehouse_id AS warehouseId, w.name AS warehouseName,
+      pd.customer_id AS customerId, c.name AS customerName, c.is_walk_in AS isWalkIn,
+      pd.sale_date AS saleDate, pd.payment_method AS paymentMethod, pd.note, pd.discount,
+      pd.total_amount AS totalAmount, pd.grand_total AS grandTotal,
+      pd.paid_amount AS paidAmount, pd.due_amount AS dueAmount,
+      pd.created_at AS createdAt, pd.updated_at AS updatedAt
+     FROM pos_drafts pd JOIN warehouses w ON w.id = pd.warehouse_id
+     JOIN customers c ON c.id = pd.customer_id WHERE pd.id = ?`,
+    [draftId],
+  );
+  if (!headers[0]) return null;
+  const [items] = await connection.execute(
+    `SELECT pdi.id, pdi.product_id AS productId, p.name AS productName, p.slug, p.sku,
+      pdi.size_id AS sizeId, s.name AS sizeName, pdi.color_id AS colorId, clr.name AS colorName,
+      pdi.quantity, pdi.unit_price AS price, pdi.discount, pdi.line_total AS lineTotal
+     FROM pos_draft_items pdi JOIN products p ON p.id = pdi.product_id
+     LEFT JOIN sizes s ON s.id = pdi.size_id LEFT JOIN colors clr ON clr.id = pdi.color_id
+     WHERE pdi.pos_draft_id = ? ORDER BY pdi.id`,
+    [draftId],
+  );
+  return { ...headers[0], items };
+}
+
+async function saveDraft(input: z.infer<typeof draftInput>, draftId?: number) {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [warehouses] = await connection.execute<any[]>("SELECT id FROM warehouses WHERE id = ? AND is_active = TRUE", [input.warehouseId]);
+    if (!warehouses[0]) throw new HttpError(400, "Active warehouse not found");
+    const [customers] = await connection.execute<any[]>("SELECT id, is_walk_in AS isWalkIn FROM customers WHERE id = ? AND is_active = TRUE", [input.customerId]);
+    if (!customers[0]) throw new HttpError(400, "Active customer not found");
+    const items = input.items.map(item => ({ ...item, sizeId: item.sizeId ?? null, colorId: item.colorId ?? null, lineTotal: Number((item.quantity * item.price - item.discount).toFixed(2)) }));
+    if (items.some(item => item.lineTotal < 0)) throw new HttpError(400, "Item discount cannot exceed its item amount");
+    const totalAmount = Number(items.reduce((sum, item) => sum + item.lineTotal, 0).toFixed(2));
+    if (input.discount > totalAmount) throw new HttpError(400, "Sale discount cannot exceed total amount");
+    const grandTotal = Number((totalAmount - input.discount).toFixed(2));
+    if (input.paidAmount > grandTotal) throw new HttpError(400, "Paid amount cannot exceed grand total");
+    const dueAmount = Number((grandTotal - input.paidAmount).toFixed(2));
+    if (customers[0].isWalkIn && dueAmount > 0 && input.paidAmount > 0) throw new HttpError(400, "Walking Customer cannot have a partially paid draft");
+    let savedId = draftId;
+    if (savedId) {
+      const [updated] = await connection.execute<any>("UPDATE pos_drafts SET warehouse_id=?, customer_id=?, sale_date=?, payment_method=?, note=?, discount=?, total_amount=?, grand_total=?, paid_amount=?, due_amount=? WHERE id=?", [input.warehouseId, input.customerId, input.saleDate ?? null, input.paymentMethod, input.note ?? null, input.discount, totalAmount, grandTotal, input.paidAmount, dueAmount, savedId]);
+      if (!updated.affectedRows) throw new HttpError(404, "POS draft not found");
+      await connection.execute("DELETE FROM pos_draft_items WHERE pos_draft_id = ?", [savedId]);
+    } else {
+      const [created] = await connection.execute<any>("INSERT INTO pos_drafts (warehouse_id, customer_id, sale_date, payment_method, note, discount, total_amount, grand_total, paid_amount, due_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.warehouseId, input.customerId, input.saleDate ?? null, input.paymentMethod, input.note ?? null, input.discount, totalAmount, grandTotal, input.paidAmount, dueAmount]);
+      savedId = created.insertId;
+    }
+    for (const item of items) await connection.execute("INSERT INTO pos_draft_items (pos_draft_id, product_id, size_id, color_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [savedId!, item.productId, item.sizeId, item.colorId, item.quantity, item.price, item.discount, item.lineTotal]);
+    await connection.commit();
+    return await draftDetails(savedId!, connection);
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}
+
 posSalesRouter.use(requireAuth, requireAdmin);
 
 // POS sales history. Add filters as needed, for example: ?warehouseId=1&dateFrom=2026-08-01&dateTo=2026-08-31
@@ -84,6 +152,16 @@ posSalesRouter.get("/", asyncHandler(async (req, res) => {
   const [rows] = await db.execute<any[]>(`${headerSelect}${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""} ORDER BY ps.sale_date DESC, ps.id DESC`, values);
   res.json({ success: true, data: rows });
 }));
+
+posSalesRouter.get("/drafts", asyncHandler(async (_req, res) => {
+  const [rows] = await db.query(`SELECT pd.id, pd.warehouse_id AS warehouseId, w.name AS warehouseName, pd.customer_id AS customerId, c.name AS customerName, pd.total_amount AS totalAmount, pd.grand_total AS grandTotal, pd.updated_at AS updatedAt FROM pos_drafts pd JOIN warehouses w ON w.id = pd.warehouse_id JOIN customers c ON c.id = pd.customer_id ORDER BY pd.updated_at DESC`);
+  res.json({ success: true, data: rows });
+}));
+
+posSalesRouter.post("/drafts", asyncHandler(async (req, res) => { res.status(201).json({ success: true, data: await saveDraft(draftInput.parse(req.body)) }); }));
+posSalesRouter.get("/drafts/:id", asyncHandler(async (req, res) => { const draft = await draftDetails(id.parse(req.params.id)); if (!draft) throw new HttpError(404, "POS draft not found"); res.json({ success: true, data: draft }); }));
+posSalesRouter.patch("/drafts/:id", asyncHandler(async (req, res) => { res.json({ success: true, data: await saveDraft(draftInput.parse(req.body), id.parse(req.params.id)) }); }));
+posSalesRouter.delete("/drafts/:id", asyncHandler(async (req, res) => { const [result] = await db.execute<any>("DELETE FROM pos_drafts WHERE id = ?", [id.parse(req.params.id)]); if (!result.affectedRows) throw new HttpError(404, "POS draft not found"); res.status(204).send(); }));
 
 posSalesRouter.get("/:id", asyncHandler(async (req, res) => {
   const sale = await saleDetails(id.parse(req.params.id));
@@ -168,6 +246,10 @@ posSalesRouter.post("/", asyncHandler(async (req, res) => {
     } else if (input.paidAmount > 0) saleLines.push({ headCode: 1000101, debit: input.paidAmount });
     saleLines.push({ headCode: 4000101, credit: grandTotal }, { headCode: 5000107, debit: cost }, { headCode: 1000108, credit: cost });
     await postAccountEntries(connection, { referenceType: "pos_sale", referenceId: result.insertId, date: saleDate, customerId, description: `POS sale ${result.insertId}`, lines: saleLines });
+    if (input.draftId) {
+      const [draft] = await connection.execute<any>("DELETE FROM pos_drafts WHERE id = ?", [input.draftId]);
+      if (!draft.affectedRows) throw new HttpError(404, "POS draft not found");
+    }
     await connection.commit();
     res.status(201).json({ success: true, data: await saleDetails(result.insertId, connection) });
   } catch (error) {
