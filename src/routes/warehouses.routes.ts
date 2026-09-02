@@ -19,6 +19,18 @@ warehousesRouter.delete("/:id", requireAuth, requireAdmin, asyncHandler(async (r
 
 // This is the dynamic stock balance for the selected warehouse.
 warehousesRouter.get("/:id/stocks", asyncHandler(async (req, res) => {
-  const [rows] = await db.execute<any[]>(`SELECT ws.product_id AS productId, p.name AS productName, p.sku, ws.quantity, ws.updated_at AS updatedAt FROM warehouse_stocks ws JOIN products p ON p.id = ws.product_id WHERE ws.warehouse_id = ? ORDER BY p.name`, [Number(req.params.id)]);
-  res.json({ success: true, data: rows });
+  const warehouseId = z.coerce.number().int().positive().parse(req.params.id);
+  const [warehouses] = await db.execute<any[]>("SELECT id, name, code FROM warehouses WHERE id = ? AND is_active = TRUE", [warehouseId]);
+  if (!warehouses[0]) throw new HttpError(404, "Active warehouse not found");
+  const [rows] = await db.execute<any[]>(
+    `SELECT ws.product_id AS productId, p.name AS productName, p.slug, p.sku,
+      p.selling_price AS sellingPrice, p.discount_type AS discountType, p.discount,
+      ws.quantity AS availableQuantity, ws.updated_at AS updatedAt
+     FROM warehouse_stocks ws
+     JOIN products p ON p.id = ws.product_id
+     WHERE ws.warehouse_id = ? AND ws.quantity > 0 AND p.is_active = TRUE
+     ORDER BY p.name`,
+    [warehouseId],
+  );
+  res.json({ success: true, data: { warehouse: warehouses[0], products: rows } });
 }));

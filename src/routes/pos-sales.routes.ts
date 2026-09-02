@@ -102,7 +102,7 @@ posSalesRouter.post("/", asyncHandler(async (req, res) => {
     let customerId = input.customerId ?? null;
     let customerName: string | null = null;
     if (customerId) {
-      const [customers] = await connection.execute<any[]>("SELECT id, name FROM customers WHERE id = ? AND is_active = TRUE", [customerId]);
+      const [customers] = await connection.execute<any[]>("SELECT id, name, is_walk_in AS isWalkIn FROM customers WHERE id = ? AND is_active = TRUE", [customerId]);
       if (!customers[0]) throw new HttpError(400, "Active customer not found");
       customerName = customers[0].name;
       await createPartyCoa("customer", Number(customerId), customerName!, connection);
@@ -135,6 +135,10 @@ posSalesRouter.post("/", asyncHandler(async (req, res) => {
     const grandTotal = Number((totalAmount - input.discount).toFixed(2));
     if (input.paidAmount > grandTotal) throw new HttpError(400, "Paid amount cannot exceed grand total");
     const dueAmount = Number((grandTotal - input.paidAmount).toFixed(2));
+    if (customerId) {
+      const [customers] = await connection.execute<any[]>("SELECT is_walk_in AS isWalkIn FROM customers WHERE id = ?", [customerId]);
+      if (customers[0]?.isWalkIn && dueAmount > 0) throw new HttpError(400, "Walking Customer must pay the full grand total; due amount is not allowed");
+    }
     if (dueAmount > 0 && !customerId) throw new HttpError(400, "customerId or customer details are required when a POS sale has due amount");
     const verifyAmount = (provided: number | undefined, calculated: number, name: string) => { if (provided !== undefined && Math.abs(provided - calculated) > 0.009) throw new HttpError(400, `${name} must match the calculated amount (${calculated})`); };
     verifyAmount(input.totalAmount, totalAmount, "totalAmount"); verifyAmount(input.grandTotal, grandTotal, "grandTotal"); verifyAmount(input.dueAmount, dueAmount, "dueAmount");
@@ -156,8 +160,12 @@ posSalesRouter.post("/", asyncHandler(async (req, res) => {
     }
     const [costRows] = await connection.execute<any[]>("SELECT COALESCE(SUM(psi.quantity * p.buying_price), 0) AS cost FROM pos_sale_items psi JOIN products p ON p.id = psi.product_id WHERE psi.pos_sale_id = ?", [result.insertId]);
     const cost = Number(costRows[0].cost);
-    const saleLines: Array<{ headCode: number; debit?: number; credit?: number }> = [{ headCode: 1000101, debit: input.paidAmount }];
-    if (dueAmount > 0 && customerId) { const customerCoa = await createPartyCoa("customer", customerId, customerName!, connection); saleLines.push({ headCode: Number(customerCoa.HeadCode), debit: dueAmount }); }
+    const saleLines: Array<{ headCode: number; debit?: number; credit?: number }> = [];
+    if (customerId) {
+      const customerCoa = await createPartyCoa("customer", customerId, customerName!, connection);
+      saleLines.push({ headCode: Number(customerCoa.HeadCode), debit: grandTotal });
+      if (input.paidAmount > 0) saleLines.push({ headCode: 1000101, debit: input.paidAmount }, { headCode: Number(customerCoa.HeadCode), credit: input.paidAmount });
+    } else if (input.paidAmount > 0) saleLines.push({ headCode: 1000101, debit: input.paidAmount });
     saleLines.push({ headCode: 4000101, credit: grandTotal }, { headCode: 5000107, debit: cost }, { headCode: 1000108, credit: cost });
     await postAccountEntries(connection, { referenceType: "pos_sale", referenceId: result.insertId, date: saleDate, customerId, description: `POS sale ${result.insertId}`, lines: saleLines });
     await connection.commit();
