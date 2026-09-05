@@ -71,7 +71,7 @@ async function allocateWarehouseStock(connection: any, order: any, warehouseId: 
     if (!stock.affectedRows) throw new HttpError(400, `Insufficient stock in warehouse for product ID ${item.productId}`);
     const [product] = await connection.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND stock_quantity >= ?", [item.quantity, item.productId, item.quantity]);
     if (!product.affectedRows) throw new HttpError(400, `Product ID ${item.productId} does not have enough stock`);
-    await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'ecommerce_order', ?, 'ecommerce_order', ?, 'E-commerce order reserved stock')", [warehouseId, item.productId, -item.quantity, order.id, "E-commerce order warehouse assigned"]);
+    await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'ecommerce_order', ?, 'ecommerce_order', ?, 'E-commerce order reserved stock')", [warehouseId, item.productId, -item.quantity, order.id]);
   }
   await connection.execute("UPDATE ecommerce_orders SET warehouse_id = ? WHERE id = ?", [warehouseId, order.id]);
 }

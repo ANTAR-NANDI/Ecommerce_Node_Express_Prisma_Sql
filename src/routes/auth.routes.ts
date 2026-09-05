@@ -79,9 +79,14 @@ customerAuthRouter.post("/registration", registration);
 customerAuthRouter.post("/login", customerLogin);
 
 authRouter.get("/me", requireAuth, asyncHandler(async (req, res) => {
-  const [rows] = await db.execute<any[]>("SELECT id, name, email, role, created_at FROM users WHERE id = ?", [req.user!.userId]);
-  if (!rows[0]) throw new HttpError(404, "User not found");
-  res.json({ success: true, data: rows[0] });
+  if (req.user!.role === "customer") {
+    const [customers] = await db.execute<any[]>("SELECT id, name, first_name AS firstName, last_name AS lastName, phone, email, gender, date_of_birth AS dateOfBirth, 'customer' AS role, created_at AS createdAt FROM customers WHERE id = ? AND is_active = TRUE", [req.user!.userId]);
+    if (!customers[0]) throw new HttpError(404, "Customer not found");
+    return res.json({ success: true, data: customers[0] });
+  }
+  const [users] = await db.execute<any[]>("SELECT id, name, email, role, created_at AS createdAt FROM users WHERE id = ?", [req.user!.userId]);
+  if (!users[0]) throw new HttpError(404, "User not found");
+  res.json({ success: true, data: users[0] });
 }));
 
 authRouter.post("/refresh", asyncHandler(async (req, res) => {
