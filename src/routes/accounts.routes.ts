@@ -220,7 +220,7 @@ accountsRouter.post("/supplier-payments", asyncHandler(async (req, res) => {
     const number = paymentNo("SUPPAY"); const [payment] = await connection.execute<any>("INSERT INTO supplier_payments (payment_number, supplier_id, purchase_id, payment_date, amount, payment_method, payment_method_id, account_id, cheque_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [number, input.supplier_id, input.purchase_id, input.date, input.amount, method, input.payment_method_id, account?.id ?? null, chequeId, input.remarks]);
     if (method !== "cheque") {
       const supplierCoa = await createPartyCoa("supplier", input.supplier_id, purchase.supplierName, connection);
-      await postAccountEntries(connection, { referenceType: "supplier_payment", referenceId: payment.insertId, date: input.date, supplierId: input.supplier_id, description: `Supplier payment ${number}`, lines: [{ headCode: Number(supplierCoa.HeadCode), debit: input.amount }, { headCode: Number(account.HeadCode), credit: input.amount }] });
+      await postAccountEntries(connection, { referenceType: "supplier_payment", referenceId: payment.insertId, purchaseId: input.purchase_id, date: input.date, supplierId: input.supplier_id, description: `Supplier payment ${number}`, lines: [{ headCode: Number(supplierCoa.HeadCode), debit: input.amount }, { headCode: Number(account.HeadCode), credit: input.amount }] });
       await connection.execute("UPDATE purchases SET paid_amount = paid_amount + ? WHERE id = ?", [input.amount, input.purchase_id]);
     }
     await connection.commit();
@@ -246,7 +246,7 @@ accountsRouter.post("/supplier-payments/cheques/:chequeId/pass", asyncHandler(as
     await connection.execute("UPDATE cheques SET account_id = ? WHERE id = ?", [selectedAccountId, chequeId]);
     await connection.execute("UPDATE supplier_payments SET account_id = ? WHERE id = ?", [selectedAccountId, cheque.paymentId]);
     await connection.execute("INSERT INTO cheque_statuses (cheque_id, status, status_date, remarks) VALUES (?, 'passed', COALESCE(?, CURDATE()), ?)", [chequeId, approval.date ?? null, approval.remarks ?? null]);
-    await postAccountEntries(connection, { referenceType: "supplier_payment", referenceId: cheque.paymentId, date: approval.date, supplierId: cheque.supplierId, description: `Supplier cheque passed ${cheque.chequeNumber}`, lines: [{ headCode: Number(supplierCoa.HeadCode), debit: Number(cheque.amount) }, { headCode: Number(accounts[0].HeadCode), credit: Number(cheque.amount) }] });
+    await postAccountEntries(connection, { referenceType: "supplier_payment", referenceId: cheque.paymentId, purchaseId: cheque.purchaseId, date: approval.date, supplierId: cheque.supplierId, description: `Supplier cheque passed ${cheque.chequeNumber}`, lines: [{ headCode: Number(supplierCoa.HeadCode), debit: Number(cheque.amount) }, { headCode: Number(accounts[0].HeadCode), credit: Number(cheque.amount) }] });
     await connection.execute("UPDATE purchases SET paid_amount = paid_amount + ? WHERE id = ?", [cheque.amount, cheque.purchaseId]);
     await connection.commit();
     const [transactions] = await db.execute<any[]>(`${accountingTransactionSelect} WHERE at.reference_type = 'supplier_payment' AND at.reference_id = ? ORDER BY at.id`, [cheque.paymentId]);

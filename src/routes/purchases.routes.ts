@@ -41,6 +41,29 @@ const purchaseInput = z.object({
   input.items.forEach((item, index) => { if (item.productDiscount !== undefined && item.discount !== undefined) ctx.addIssue({ code: "custom", path: ["items", index, "productDiscount"], message: "Send productDiscount only; do not also send the legacy discount field" }); });
 });
 
+// A purchase edit never changes its settled payments. Payments have their own
+// endpoints, so preserving them prevents an edit from silently changing cash/bank
+// balances.
+const purchaseUpdateInput = z.object({
+  supplierId: id,
+  warehouseId: id,
+  purchaseDate: z.string().date().optional(),
+  invoiceNumber: z.preprocess(value => value === "" ? null : value, z.string().trim().max(100).nullable().optional()),
+  notes: z.preprocess(value => value === "" ? null : value, z.string().trim().max(2000).nullable().optional()),
+  purchaseDiscount: money.optional(),
+  discount: money.optional(),
+  shippingCost: money.optional(),
+  subtotal: money.optional(),
+  itemDiscountTotal: money.optional(),
+  totalAmount: money.optional(),
+  grandTotal: money.optional(),
+  dueAmount: money.optional(),
+  items: z.array(z.object({ productId: id, quantity: z.coerce.number().int().positive(), unitPrice: money, productDiscount: money.optional(), discount: money.optional() })).min(1).max(100),
+}).superRefine((input, ctx) => {
+  if (input.purchaseDiscount !== undefined && input.discount !== undefined) ctx.addIssue({ code: "custom", path: ["purchaseDiscount"], message: "Send purchaseDiscount only; do not also send the legacy discount field" });
+  input.items.forEach((item, index) => { if (item.productDiscount !== undefined && item.discount !== undefined) ctx.addIssue({ code: "custom", path: ["items", index, "productDiscount"], message: "Send productDiscount only; do not also send the legacy discount field" }); });
+});
+
 const headerSelect = `SELECT p.id, p.purchase_number AS purchaseNumber, p.purchase_date AS purchaseDate,
   p.invoice_number AS invoiceNumber, p.notes, p.subtotal, p.item_discount_total AS itemDiscountTotal,
   p.discount AS purchaseDiscount, p.shipping_cost AS shippingCost, p.total_amount AS totalAmount,
@@ -137,10 +160,79 @@ purchasesRouter.post("/", requireAuth, requireAdmin, asyncHandler(async (req, re
       }
       const paymentNumber = `SUPPAY-${purchaseDate.replaceAll("-", "")}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
       const [paymentResult] = await connection.execute<any>("INSERT INTO supplier_payments (payment_number, supplier_id, purchase_id, payment_date, amount, payment_method, payment_method_id, account_id, cheque_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [paymentNumber, input.supplierId, result.insertId, purchaseDate, requestedPaidAmount, method, methodId, account?.id ?? null, chequeId, input.notes ?? null]);
-      if (input.paymentMethod !== "cheque") await postAccountEntries(connection, { referenceType: "supplier_payment", referenceId: paymentResult.insertId, date: purchaseDate, supplierId: input.supplierId, description: `Initial payment for purchase ${number}`, lines: [{ headCode: Number(supplierCoa.HeadCode), debit: requestedPaidAmount }, { headCode: Number(account.HeadCode), credit: requestedPaidAmount }] });
+      if (input.paymentMethod !== "cheque") await postAccountEntries(connection, { referenceType: "supplier_payment", referenceId: paymentResult.insertId, purchaseId: result.insertId, date: purchaseDate, supplierId: input.supplierId, description: `Initial payment for purchase ${number}`, lines: [{ headCode: Number(supplierCoa.HeadCode), debit: requestedPaidAmount }, { headCode: Number(account.HeadCode), credit: requestedPaidAmount }] });
       payment = { id: paymentResult.insertId, paymentNumber, paymentMethod: input.paymentMethod, accountId: account?.id ?? null, accountName: account?.accountName ?? null, chequeId, chequeNumber: input.chequeNumber ?? null, status: input.paymentMethod === "cheque" ? "pending" : "posted", accountingPosted: input.paymentMethod !== "cheque" };
     }
     await connection.commit(); res.status(201).json({ success: true, data: { ...(await purchaseDetails(result.insertId, connection)), payment } });
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
+
+purchasesRouter.patch("/:id", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
+  const purchaseId = id.parse(req.params.id);
+  const input = purchaseUpdateInput.parse(req.body);
+  const items = input.items.map(item => {
+    const itemSubtotal = Number((item.quantity * item.unitPrice).toFixed(2));
+    const productDiscount = Number(item.productDiscount ?? item.discount ?? 0);
+    const lineTotal = Number((itemSubtotal - productDiscount).toFixed(2));
+    if (lineTotal < 0) throw new HttpError(400, `Product discount cannot exceed item subtotal for product ID ${item.productId}`);
+    return { ...item, itemSubtotal, productDiscount, lineTotal };
+  });
+  const subtotal = Number(items.reduce((sum, item) => sum + item.itemSubtotal, 0).toFixed(2));
+  const itemDiscountTotal = Number(items.reduce((sum, item) => sum + item.productDiscount, 0).toFixed(2));
+  const totalAmount = Number((subtotal - itemDiscountTotal).toFixed(2));
+  const purchaseDiscount = Number(input.purchaseDiscount ?? input.discount ?? 0);
+  const shippingCost = Number(input.shippingCost ?? 0);
+  if (purchaseDiscount > totalAmount) throw new HttpError(400, "Purchase discount cannot exceed total amount after product discounts");
+  const grandTotal = Number((totalAmount - purchaseDiscount + shippingCost).toFixed(2));
+  const verifyAmount = (provided: number | undefined, calculated: number, field: string) => { if (provided !== undefined && Math.abs(provided - calculated) > 0.009) throw new HttpError(400, `${field} must match the backend-calculated amount (${calculated})`); };
+  verifyAmount(input.subtotal, subtotal, "subtotal"); verifyAmount(input.itemDiscountTotal, itemDiscountTotal, "itemDiscountTotal"); verifyAmount(input.totalAmount, totalAmount, "totalAmount"); verifyAmount(input.grandTotal, grandTotal, "grandTotal");
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const purchase = await purchaseDetails(purchaseId, connection);
+    if (!purchase) throw new HttpError(404, "Purchase not found");
+    if (purchase.status !== "received") throw new HttpError(400, "Only received purchases can be edited");
+    const [payments] = await connection.execute<any[]>("SELECT COUNT(*) AS count FROM supplier_payments WHERE purchase_id = ?", [purchaseId]);
+    if (Number(payments[0].count) > 0 && Number(purchase.supplierId) !== input.supplierId) throw new HttpError(400, "Supplier cannot be changed after a payment has been recorded");
+    if (grandTotal < Number(purchase.paidAmount)) throw new HttpError(400, "Grand total cannot be less than the amount already paid");
+    const [returns] = await connection.execute<any[]>("SELECT COUNT(*) AS count FROM purchase_returns WHERE purchase_id = ? AND status = 'completed'", [purchaseId]);
+    if (Number(returns[0].count) > 0) throw new HttpError(400, "A purchase with completed returns cannot be edited");
+    const [warehouse] = await connection.execute<any[]>("SELECT id FROM warehouses WHERE id = ? AND is_active = TRUE", [input.warehouseId]);
+    if (!warehouse[0]) throw new HttpError(400, "Active warehouse not found");
+    const [supplierRows] = await connection.execute<any[]>("SELECT name FROM suppliers WHERE id = ? AND is_active = TRUE", [input.supplierId]);
+    if (!supplierRows[0]) throw new HttpError(400, "Active supplier not found");
+
+    // Remove the original receipt first. The guarded update protects stock already
+    // consumed by sales or adjustments from being overwritten by this edit.
+    for (const oldItem of purchase.items as any[]) {
+      const [stock] = await connection.execute<any>("UPDATE warehouse_stocks SET quantity = quantity - ? WHERE warehouse_id = ? AND product_id = ? AND quantity >= ?", [oldItem.quantity, purchase.warehouseId, oldItem.productId, oldItem.quantity]);
+      if (!stock.affectedRows) throw new HttpError(400, `Cannot edit: product ${oldItem.productName} has already been used or sold from this warehouse`);
+      await connection.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", [oldItem.quantity, oldItem.productId]);
+    }
+    await connection.execute("DELETE FROM purchase_items WHERE purchase_id = ?", [purchaseId]);
+    for (const item of items) {
+      await connection.execute("INSERT INTO purchase_items (purchase_id, product_id, quantity, unit_price, discount, line_total) VALUES (?, ?, ?, ?, ?, ?)", [purchaseId, item.productId, item.quantity, item.unitPrice, item.productDiscount, item.lineTotal]);
+      await connection.execute("INSERT INTO warehouse_stocks (warehouse_id, product_id, quantity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)", [input.warehouseId, item.productId, item.quantity]);
+      await connection.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", [item.quantity, item.productId]);
+    }
+    await connection.execute("DELETE FROM stock_movements WHERE reference_type = 'purchase' AND reference_id = ?", [purchaseId]);
+    for (const item of items) await connection.execute("INSERT INTO stock_movements (warehouse_id, product_id, movement_type, quantity_change, reference_type, reference_id, note) VALUES (?, ?, 'purchase', ?, 'purchase', ?, ?)", [input.warehouseId, item.productId, item.quantity, purchaseId, input.invoiceNumber ?? null]);
+    const dueAmount = Number((grandTotal - Number(purchase.paidAmount)).toFixed(2));
+    verifyAmount(input.dueAmount, dueAmount, "dueAmount");
+    const purchaseDate = input.purchaseDate ?? String(purchase.purchaseDate).slice(0, 10);
+    await connection.execute("UPDATE purchases SET supplier_id=?, warehouse_id=?, purchase_date=?, invoice_number=?, notes=?, subtotal=?, item_discount_total=?, discount=?, shipping_cost=?, total_amount=?, grand_total=?, due_amount=? WHERE id=?", [input.supplierId, input.warehouseId, purchaseDate, input.invoiceNumber ?? null, input.notes ?? null, subtotal, itemDiscountTotal, purchaseDiscount, shippingCost, totalAmount, grandTotal, dueAmount, purchaseId]);
+
+    const supplierCoa = await createPartyCoa("supplier", input.supplierId, supplierRows[0].name, connection);
+    const [ledgerRows] = await connection.execute<any[]>("SELECT id, debit, credit FROM account_transactions WHERE purchase_id = ? AND reference_type = 'purchase' FOR UPDATE", [purchaseId]);
+    const inventoryEntry = ledgerRows.find(row => Number(row.debit) > 0);
+    const supplierEntry = ledgerRows.find(row => Number(row.credit) > 0);
+    if (!inventoryEntry || !supplierEntry || ledgerRows.length !== 2) throw new HttpError(500, "Purchase accounting entries are missing or cannot be updated");
+    const description = `Purchase ${purchase.purchaseNumber}`;
+    await connection.execute("UPDATE account_transactions SET transaction_date=?, head_code=1000108, debit=?, credit=0, sale_id=NULL, purchase_id=?, customer_id=NULL, supplier_id=?, description=? WHERE id=?", [purchaseDate, grandTotal, purchaseId, input.supplierId, description, inventoryEntry.id]);
+    await connection.execute("UPDATE account_transactions SET transaction_date=?, head_code=?, debit=0, credit=?, sale_id=NULL, purchase_id=?, customer_id=NULL, supplier_id=?, description=? WHERE id=?", [purchaseDate, Number(supplierCoa.HeadCode), grandTotal, purchaseId, input.supplierId, description, supplierEntry.id]);
+    await connection.commit();
+    res.json({ success: true, data: await purchaseDetails(purchaseId, connection) });
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
 
