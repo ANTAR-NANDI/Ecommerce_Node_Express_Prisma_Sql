@@ -44,7 +44,7 @@ reportsRouter.get("/stock", asyncHandler(async (req, res) => {
   if (query.dateFrom) { openingFilters.push("DATE(sm.created_at) < ?"); openingValues.push(query.dateFrom); }
 
   const [rows] = await db.execute<any[]>(
-    `SELECT sm.warehouse_id AS warehouseId, w.name AS warehouseName, sm.product_id AS productId,
+    `SELECT selected.warehouse_id AS warehouseId, w.name AS warehouseName, selected.product_id AS productId,
       p.name AS productName, p.sku, COALESCE(opening.quantity, 0) AS openingQuantity,
       COALESCE(period.quantity, 0) AS movementQuantity, COALESCE(opening.quantity, 0) + COALESCE(period.quantity, 0) AS closingQuantity,
       COALESCE(ws.quantity, 0) AS currentQuantity
