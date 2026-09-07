@@ -38,6 +38,27 @@ warehouseRequisitionsRouter.post("/", requireAuth, requireAdmin, asyncHandler(as
   const input = requestInput.parse(req.body); if (input.requestingWarehouseId === input.sourceWarehouseId) throw new HttpError(400, "Requesting and source warehouses must be different");
   const connection = await db.getConnection(); try { await connection.beginTransaction(); const [result] = await connection.execute<any>("INSERT INTO warehouse_requisitions (requisition_number, requesting_warehouse_id, source_warehouse_id, note) VALUES (?, ?, ?, ?)", [requisitionNumber(), input.requestingWarehouseId, input.sourceWarehouseId, input.note ?? null]); for (const item of grouped(input.items)) await connection.execute("INSERT INTO warehouse_requisition_items (requisition_id, product_id, quantity) VALUES (?, ?, ?)", [result.insertId, item.productId, item.quantity]); await connection.commit(); res.status(201).json({ success: true, data: await requisitionDetails(result.insertId, connection) }); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }));
+// Only pending requisitions are editable. Once approved they may be used by a
+// transfer, so changing the requested products or warehouses would be unsafe.
+warehouseRequisitionsRouter.patch("/:id", asyncHandler(async (req, res) => {
+  const requisitionId = id.parse(req.params.id);
+  const input = requestInput.parse(req.body);
+  if (input.requestingWarehouseId === input.sourceWarehouseId) throw new HttpError(400, "Requesting and source warehouses must be different");
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute<any[]>("SELECT id, status FROM warehouse_requisitions WHERE id = ? FOR UPDATE", [requisitionId]);
+    if (!rows[0]) throw new HttpError(404, "Warehouse requisition not found");
+    if (rows[0].status !== "pending") throw new HttpError(400, "Only a pending requisition can be edited");
+    const [warehouses] = await connection.execute<any[]>("SELECT id FROM warehouses WHERE id IN (?, ?) AND is_active = TRUE", [input.requestingWarehouseId, input.sourceWarehouseId]);
+    if (warehouses.length !== 2) throw new HttpError(400, "Both warehouses must be active");
+    await connection.execute("UPDATE warehouse_requisitions SET requesting_warehouse_id = ?, source_warehouse_id = ?, note = ? WHERE id = ?", [input.requestingWarehouseId, input.sourceWarehouseId, input.note ?? null, requisitionId]);
+    await connection.execute("DELETE FROM warehouse_requisition_items WHERE requisition_id = ?", [requisitionId]);
+    for (const item of grouped(input.items)) await connection.execute("INSERT INTO warehouse_requisition_items (requisition_id, product_id, quantity) VALUES (?, ?, ?)", [requisitionId, item.productId, item.quantity]);
+    await connection.commit();
+    res.json({ success: true, data: await requisitionDetails(requisitionId, connection) });
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
 async function changeStatus(req: any, res: any, status: "approved" | "rejected" | "cancelled") {
   const requisitionId = id.parse(req.params.id); const [result] = await db.execute<any>("UPDATE warehouse_requisitions SET status = ? WHERE id = ? AND status = 'pending'", [status, requisitionId]); if (!result.affectedRows) throw new HttpError(400, "Only a pending requisition can be changed this way"); res.json({ success: true, data: await requisitionDetails(requisitionId) });
 }
@@ -45,3 +66,16 @@ warehouseRequisitionsRouter.patch("/:id/approve", requireAuth, requireAdmin, asy
 warehouseRequisitionsRouter.post("/:id/approve", requireAuth, requireAdmin, asyncHandler(async (req, res) => changeStatus(req, res, "approved")));
 warehouseRequisitionsRouter.patch("/:id/reject", requireAuth, requireAdmin, asyncHandler(async (req, res) => changeStatus(req, res, "rejected")));
 warehouseRequisitionsRouter.patch("/:id/cancel", requireAuth, requireAdmin, asyncHandler(async (req, res) => changeStatus(req, res, "cancelled")));
+warehouseRequisitionsRouter.delete("/:id", asyncHandler(async (req, res) => {
+  const requisitionId = id.parse(req.params.id);
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute<any[]>("SELECT status FROM warehouse_requisitions WHERE id = ? FOR UPDATE", [requisitionId]);
+    if (!rows[0]) throw new HttpError(404, "Warehouse requisition not found");
+    if (rows[0].status !== "pending") throw new HttpError(400, "Only a pending requisition can be deleted");
+    await connection.execute("DELETE FROM warehouse_requisitions WHERE id = ?", [requisitionId]);
+    await connection.commit();
+    res.status(204).send();
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}));
